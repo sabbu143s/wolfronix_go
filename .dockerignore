@@ -1,0 +1,7 @@
+wolfronix.db
+wolfronix_data/
+.git/
+client/
+*.crt
+*.key
+*.txt

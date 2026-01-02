@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  wolfronix:
+    build: .
+    container_name: wolfronix_v3
+    ports:
+      - "5001:5001"
+    environment:
+      # 🔐 SECURITY CONFIG
+      - SERVER_PORT=5001
+      # IMPORTANT: Change this password in production!
+      - VAULT_PASSWORD=MySuperSecretVaultPass2026!
+      # Point DB to the persistent volume folder
+      - DB_PATH=/root/data/wolfronix.db
+    volumes:
+      # 💾 PERSISTENCE: Map host folder to container folder
+      # This ensures 'wolfronix.db' survives container restarts
+      - ./wolfronix_data:/root/data
+    restart: unless-stopped
