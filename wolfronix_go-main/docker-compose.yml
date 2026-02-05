@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: wolfronix_db
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=secretpassword
+      - POSTGRES_DB=client_vault
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d client_vault"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  wolfronix:
+    build: .
+    container_name: wolfronix_v3
+    ports:
+      - "5002:5001" # Host Port 5002 (HTTPS) -> Container Port 5001
+    volumes:
+      - ./wolfronix_data:/root/data
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=admin
+      - DB_PASS=secretpassword
+      - DB_NAME=client_vault
+      # Client Database API Configuration (Universal DB Connector)
+      - CLIENT_DB_API_ENDPOINT=${CLIENT_DB_API_ENDPOINT:-}
+      - CLIENT_DB_API_KEY=${CLIENT_DB_API_KEY:-}
+      - CLIENT_DB_TYPE=${CLIENT_DB_TYPE:-custom_api}
+      - CLIENT_DB_TIMEOUT=${CLIENT_DB_TIMEOUT:-30s}
+      - CLIENT_DB_RETRY_COUNT=${CLIENT_DB_RETRY_COUNT:-3}
+      # Large file handling
+      - GOGC=50
+      - GOMEMLIMIT=6GiB
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  postgres_data:

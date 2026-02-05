@@ -1,0 +1,22 @@
+Sample Sensitive Data for Wolfronix Testing
+=============================================
+
+Customer Record #1:
+Name: John Doe
+PAN: ABCDE1234F
+Aadhaar: 1234 5678 9012
+Credit Card: 4532-1234-5678-9012
+Email: john.doe@example.com
+Phone: +91-9876543210
+SSN: 123-45-6789
+
+Customer Record #2:
+Name: Jane Smith
+PAN: XYZAB9876K
+Aadhaar: 9876 5432 1098
+Credit Card: 5412-7534-8621-0954
+Email: jane.smith@company.org
+Phone: +91-8765432109
+SSN: 987-65-4321
+
+This file contains sensitive PII data for testing Wolfronix encryption layers.
