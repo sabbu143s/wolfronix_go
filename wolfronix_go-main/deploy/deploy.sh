@@ -197,7 +197,7 @@ MAX_RETRIES=30
 RETRY_COUNT=0
 
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -sk "https://localhost:8443/health" > /dev/null 2>&1; then
+    if curl -sk "https://localhost:9443/health" > /dev/null 2>&1; then
         echo -e "${GREEN}✓ Wolfronix is healthy${NC}"
         break
     fi
@@ -218,13 +218,13 @@ fi
 echo -e "${YELLOW}[8/8] Configuring firewall...${NC}"
 
 if command -v ufw &> /dev/null; then
-    ufw allow 8080/tcp
-    ufw allow 8443/tcp
+    ufw allow 9080/tcp
+    ufw allow 9443/tcp
     ufw allow 22/tcp
     echo -e "${GREEN}✓ UFW firewall configured${NC}"
 elif command -v firewall-cmd &> /dev/null; then
-    firewall-cmd --permanent --add-port=8080/tcp
-    firewall-cmd --permanent --add-port=8443/tcp
+    firewall-cmd --permanent --add-port=9080/tcp
+    firewall-cmd --permanent --add-port=9443/tcp
     firewall-cmd --permanent --add-service=ssh
     firewall-cmd --reload
     echo -e "${GREEN}✓ Firewalld configured${NC}"
@@ -244,9 +244,9 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 echo ""
 echo -e "${BLUE}Server Information:${NC}"
-echo "  URL:      https://${DOMAIN}:8443"
-echo "  Health:   https://${DOMAIN}:8443/health"
-echo "  API:      https://${DOMAIN}:8443/api/v1/"
+echo "  URL:      https://${DOMAIN}:9443"
+echo "  Health:   https://${DOMAIN}:9443/health"
+echo "  API:      https://${DOMAIN}:9443/api/v1/"
 echo ""
 echo -e "${BLUE}Service Status:${NC}"
 docker-compose -f docker-compose.prod.yml ps

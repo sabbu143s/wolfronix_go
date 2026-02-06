@@ -6,8 +6,8 @@ services:
     image: nginx:alpine
     container_name: wolfronix_nginx
     ports:
-      - "8080:80"
-      - "8443:443"
+      - "9080:80"
+      - "9443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
