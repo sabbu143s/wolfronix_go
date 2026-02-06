@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"wolfronixgo/internal/clientdb"
 	"wolfronixgo/internal/fakegen"
 	"wolfronixgo/internal/keywrap"
 	"wolfronixgo/internal/masking"
@@ -38,8 +39,14 @@ import (
 // Chunk size for streaming (64KB - optimal for disk I/O)
 const CHUNK_SIZE = 64 * 1024
 
-// Storage directory for encrypted files
+// Storage directory for encrypted files (used only in self-hosted mode)
 const ENCRYPTED_FILES_DIR = "/root/data/encrypted_files"
+
+// Storage mode constants
+const (
+	StorageModeSelfHosted = "self_hosted" // Wolfronix stores data locally (demo/legacy)
+	StorageModeClientAPI  = "client_api"  // Data stored via Client's API (enterprise)
+)
 
 // --- GLOBALS ---
 var (
@@ -49,6 +56,9 @@ var (
 	metricsStore     *metrics.MetricsStore
 	keyWrapStore     *keywrap.KeyWrapStore
 	fakeGen          *fakegen.FakeDataGenerator
+	// Client DB components (Enterprise mode)
+	clientRegistry *clientdb.ClientRegistry
+	clientDBConn   *clientdb.ClientDBConnector
 	// Streaming tokens for large file access (token -> decryption info)
 	streamTokens     = make(map[string]*StreamToken)
 	streamTokenMutex = &sync.Mutex{}
@@ -104,6 +114,18 @@ func initDB() {
 		} else {
 			log.Println("🔐 Key Wrapping System Initialized!")
 		}
+
+		// Initialize client registry (Wolfronix only stores client metadata)
+		clientRegistry, err = clientdb.NewClientRegistry(db)
+		if err != nil {
+			log.Printf("⚠️ Client Registry Init Failed: %v", err)
+		} else {
+			log.Println("📋 Client Registry Initialized!")
+		}
+
+		// Initialize client DB connector (for enterprise mode)
+		clientDBConn = clientdb.NewClientDBConnector()
+		log.Println("🔌 Client DB Connector Ready!")
 
 		// Initialize fake data generator
 		fakeGen = fakegen.NewFakeDataGenerator()
@@ -192,6 +214,16 @@ func main() {
 	r.HandleFunc("/api/v1/files/{id}/stream-token", createStreamTokenHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/api/v1/stream/{token}", streamFileHandler).Methods("GET", "OPTIONS")
 	r.HandleFunc("/admin/clients", registerClientHandler).Methods("POST", "OPTIONS")
+
+	// === ENTERPRISE CLIENT REGISTRATION ===
+	// Register a new client with their API endpoint (Enterprise mode)
+	r.HandleFunc("/api/v1/enterprise/register", registerEnterpriseClientHandler).Methods("POST", "OPTIONS")
+	// List registered clients
+	r.HandleFunc("/api/v1/enterprise/clients", listEnterpriseClientsHandler).Methods("GET", "OPTIONS")
+	// Get client info
+	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", getEnterpriseClientHandler).Methods("GET", "OPTIONS")
+	// Update client endpoint
+	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", updateEnterpriseClientHandler).Methods("PUT", "OPTIONS")
 
 	// === ZERO-KNOWLEDGE KEY MANAGEMENT ROUTES ===
 	// Registration: Browser sends wrapped private key + public key
@@ -322,17 +354,6 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📦 Encrypted %d bytes in chunks → %s", totalSize, encryptedFilePath)
 
-	// === LAYER 1: STATIC MASKING (For Dev Environment) ===
-	if isDevEnv && fakeGen != nil {
-		fakeData := fakeGen.FakeFileContentWithMarker(int(totalSize), header.Filename)
-		log.Printf("🎭 Layer 1: Generated fake data for dev environment (%d bytes)", len(fakeData))
-		// Store fake data separately (not the actual encrypted data)
-		if db != nil {
-			db.Exec(`INSERT INTO dev_storage (prod_file_id, filename, fake_data, client_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
-				0, "FAKE_"+header.Filename, fakeData, clientID)
-		}
-	}
-
 	// === LAYER 4: DUAL KEY SPLIT ===
 	// Share A: Encrypted with USER's public key (only user can unlock)
 	encA := encryptRSA(key[:16], clientPubKey)
@@ -347,42 +368,111 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 	// Calculate Duration
 	duration := time.Since(start).Milliseconds()
 
-	// Save metadata to DB (file content is on disk, not in DB)
+	// Determine storage mode
+	storageMode := getStorageMode(clientID)
 	var prodFileID int64
-	if db != nil {
-		err := db.QueryRow(`INSERT INTO secure_storage (filename, file_path, file_size, key_part_a, key_part_b, iv, enc_time_ms, client_id, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-			header.Filename, encryptedFilePath, totalSize, encA, encB, base64.StdEncoding.EncodeToString(iv), duration, clientID, userID).Scan(&prodFileID)
 
+	if storageMode == StorageModeClientAPI && clientRegistry != nil && clientDBConn != nil {
+		// === ENTERPRISE MODE: Store via Client's API ===
+		config, err := clientRegistry.GetClientConfig(clientID)
 		if err != nil {
-			log.Println("❌ DB Write Error:", err)
-			os.Remove(encryptedFilePath)
-			if metricsStore != nil && clientID != "" {
-				metricsStore.RecordError(clientID, userID, "encrypt", err.Error())
+			log.Printf("⚠️ Client config not found, falling back to self-hosted: %v", err)
+			storageMode = StorageModeSelfHosted
+		} else {
+			// Read encrypted file for upload
+			encryptedData, err := os.ReadFile(encryptedFilePath)
+			if err != nil {
+				log.Printf("❌ Failed to read encrypted file: %v", err)
+				http.Error(w, "Storage error", 500)
+				return
 			}
-			http.Error(w, "Database Error", 500)
-			return
-		}
 
-		// Update dev_storage with prod_file_id if dev mode
-		if isDevEnv {
-			db.Exec(`UPDATE dev_storage SET prod_file_id = $1 WHERE filename = $2 AND client_id = $3`,
-				prodFileID, "FAKE_"+header.Filename, clientID)
+			// Create file metadata
+			fileMetadata := &clientdb.StoredFile{
+				Filename:    header.Filename,
+				FileSize:    totalSize,
+				KeyPartA:    encA,
+				KeyPartB:    encB,
+				IV:          base64.StdEncoding.EncodeToString(iv),
+				EncTimeMS:   duration,
+				ClientID:    clientID,
+				UserID:      userID,
+				StorageType: "blob",
+			}
+
+			// Send to client's API
+			prodFileID, err = clientDBConn.StoreFileWithData(config, fileMetadata, encryptedData)
+			if err != nil {
+				log.Printf("❌ Failed to store in Client DB: %v", err)
+				// Don't delete local file on client API error - keep as backup
+				if metricsStore != nil && clientID != "" {
+					metricsStore.RecordError(clientID, userID, "encrypt", "Client API error: "+err.Error())
+				}
+				http.Error(w, "Client storage error", 500)
+				return
+			}
+
+			// Successfully stored in client DB - remove local copy
+			os.Remove(encryptedFilePath)
+			log.Printf("📤 Data sent to Client DB (ID: %d), local copy removed", prodFileID)
+
+			// Store fake data in client's dev DB if dev mode
+			if isDevEnv && fakeGen != nil {
+				fakeData := fakeGen.FakeFileContentWithMarker(int(totalSize), header.Filename)
+				clientDBConn.StoreFakeData(config, prodFileID, "FAKE_"+header.Filename, fakeData)
+			}
 		}
 	}
 
-	// Record encryption metrics
+	if storageMode == StorageModeSelfHosted {
+		// === SELF-HOSTED MODE: Store locally (demo/legacy) ===
+		// Layer 1: Static Masking for Dev Environment
+		if isDevEnv && fakeGen != nil {
+			fakeData := fakeGen.FakeFileContentWithMarker(int(totalSize), header.Filename)
+			log.Printf("🎭 Layer 1: Generated fake data for dev environment (%d bytes)", len(fakeData))
+			if db != nil {
+				db.Exec(`INSERT INTO dev_storage (prod_file_id, filename, fake_data, client_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+					0, "FAKE_"+header.Filename, fakeData, clientID)
+			}
+		}
+
+		// Save metadata to local DB
+		if db != nil {
+			err := db.QueryRow(`INSERT INTO secure_storage (filename, file_path, file_size, key_part_a, key_part_b, iv, enc_time_ms, client_id, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+				header.Filename, encryptedFilePath, totalSize, encA, encB, base64.StdEncoding.EncodeToString(iv), duration, clientID, userID).Scan(&prodFileID)
+
+			if err != nil {
+				log.Println("❌ DB Write Error:", err)
+				os.Remove(encryptedFilePath)
+				if metricsStore != nil && clientID != "" {
+					metricsStore.RecordError(clientID, userID, "encrypt", err.Error())
+				}
+				http.Error(w, "Database Error", 500)
+				return
+			}
+
+			// Update dev_storage with prod_file_id if dev mode
+			if isDevEnv {
+				db.Exec(`UPDATE dev_storage SET prod_file_id = $1 WHERE filename = $2 AND client_id = $3`,
+					prodFileID, "FAKE_"+header.Filename, clientID)
+			}
+		}
+	}
+
+	// Record encryption metrics (in Wolfronix DB for all modes)
 	if metricsStore != nil && clientID != "" {
 		metricsStore.RecordEncryption(clientID, userID, duration, 1, totalSize)
 	}
 
-	log.Printf("✅ File encrypted: %s (%d bytes) in %dms [Chunked Streaming]", header.Filename, totalSize, duration)
+	log.Printf("✅ File encrypted: %s (%d bytes) in %dms [%s mode]", header.Filename, totalSize, duration, storageMode)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":      "success",
-		"enc_time_ms": duration,
-		"file_size":   totalSize,
-		"method":      "chunked_streaming",
+		"status":       "success",
+		"enc_time_ms":  duration,
+		"file_size":    totalSize,
+		"storage_mode": storageMode,
+		"file_id":      prodFileID,
 	})
 }
 
@@ -431,12 +521,11 @@ func encryptRSA(data []byte, pubPEM string) string {
 }
 
 func listFilesHandler(w http.ResponseWriter, r *http.Request) {
-	if db == nil {
-		http.Error(w, "DB Down", 503)
-		return
+	// Get client_id and user_id from headers or query params
+	clientID := r.Header.Get("X-Client-ID")
+	if clientID == "" {
+		clientID = r.URL.Query().Get("client_id")
 	}
-
-	// Get user_id from header or query param for filtering
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
 		userID = r.URL.Query().Get("user_id")
@@ -449,7 +538,43 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch files filtered by user_id
+	var files []map[string]interface{}
+
+	// Check storage mode
+	storageMode := getStorageMode(clientID)
+
+	if storageMode == StorageModeClientAPI && clientRegistry != nil && clientDBConn != nil {
+		// === ENTERPRISE MODE: Fetch from Client's API ===
+		config, err := clientRegistry.GetClientConfig(clientID)
+		if err == nil {
+			clientFiles, err := clientDBConn.ListFiles(config, userID)
+			if err != nil {
+				log.Printf("⚠️ Failed to list files from Client API: %v", err)
+			} else {
+				for _, f := range clientFiles {
+					files = append(files, map[string]interface{}{
+						"id":           f.ID,
+						"name":         f.Filename,
+						"date":         f.CreatedAt,
+						"size":         fmt.Sprintf("%.2f MB", float64(f.FileSize)/1024/1024),
+						"size_bytes":   f.FileSize,
+						"enc_time":     fmt.Sprintf("%d ms", f.EncTimeMS),
+						"storage_type": "client_api",
+					})
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(files)
+				return
+			}
+		}
+	}
+
+	// === SELF-HOSTED MODE: Fetch from local DB ===
+	if db == nil {
+		http.Error(w, "DB Down", 503)
+		return
+	}
+
 	rows, err := db.Query(`
 		SELECT id, filename, created_at, 
 			COALESCE(file_size, OCTET_LENGTH(encrypted_data), 0) as size,
@@ -465,7 +590,6 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var files []map[string]interface{}
 	for rows.Next() {
 		var id int
 		var size int64
@@ -953,6 +1077,150 @@ func registerClientHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&req)
 	hash := sha256.Sum256([]byte(req.Name + time.Now().String()))
 	json.NewEncoder(w).Encode(map[string]string{"api_key": hex.EncodeToString(hash[:])})
+}
+
+// === ENTERPRISE CLIENT MANAGEMENT ===
+
+// registerEnterpriseClientHandler registers a client with their API endpoint
+func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
+	if clientRegistry == nil {
+		http.Error(w, "Client registry not initialized", 503)
+		return
+	}
+
+	var req struct {
+		ClientID    string `json:"client_id"`
+		ClientName  string `json:"client_name"`
+		APIEndpoint string `json:"api_endpoint"` // Client's storage API URL
+		APIKey      string `json:"api_key"`      // Key to call client's API
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", 400)
+		return
+	}
+
+	if req.ClientID == "" || req.ClientName == "" || req.APIEndpoint == "" {
+		http.Error(w, "client_id, client_name, and api_endpoint are required", 400)
+		return
+	}
+
+	// Generate Wolfronix API key for this client
+	hash := sha256.Sum256([]byte(req.ClientID + req.ClientName + time.Now().String()))
+	wolfronixKey := hex.EncodeToString(hash[:])
+
+	client := &clientdb.RegisteredClient{
+		ClientID:     req.ClientID,
+		ClientName:   req.ClientName,
+		APIEndpoint:  req.APIEndpoint,
+		APIKey:       req.APIKey,
+		WolfronixKey: wolfronixKey,
+	}
+
+	if err := clientRegistry.RegisterClient(client); err != nil {
+		log.Printf("❌ Failed to register client: %v", err)
+		http.Error(w, "Failed to register client", 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":        "success",
+		"client_id":     client.ClientID,
+		"wolfronix_key": wolfronixKey,
+		"message":       "Client registered. Use wolfronix_key for API calls.",
+	})
+	log.Printf("✅ Enterprise client registered: %s → %s", client.ClientID, client.APIEndpoint)
+}
+
+// listEnterpriseClientsHandler lists all registered enterprise clients
+func listEnterpriseClientsHandler(w http.ResponseWriter, r *http.Request) {
+	if clientRegistry == nil {
+		http.Error(w, "Client registry not initialized", 503)
+		return
+	}
+
+	clients, err := clientRegistry.ListClients()
+	if err != nil {
+		http.Error(w, "Failed to list clients", 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"clients": clients,
+		"count":   len(clients),
+	})
+}
+
+// getEnterpriseClientHandler gets details for a specific client
+func getEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
+	if clientRegistry == nil {
+		http.Error(w, "Client registry not initialized", 503)
+		return
+	}
+
+	vars := mux.Vars(r)
+	clientID := vars["clientID"]
+
+	client, err := clientRegistry.GetClient(clientID)
+	if err != nil {
+		http.Error(w, "Client not found", 404)
+		return
+	}
+
+	// Don't expose API keys
+	client.APIKey = ""
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(client)
+}
+
+// updateEnterpriseClientHandler updates a client's configuration
+func updateEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
+	if clientRegistry == nil {
+		http.Error(w, "Client registry not initialized", 503)
+		return
+	}
+
+	vars := mux.Vars(r)
+	clientID := vars["clientID"]
+
+	var req struct {
+		APIEndpoint string `json:"api_endpoint"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", 400)
+		return
+	}
+
+	if req.APIEndpoint != "" {
+		if err := clientRegistry.UpdateClientEndpoint(clientID, req.APIEndpoint); err != nil {
+			http.Error(w, "Failed to update client", 500)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Client updated",
+	})
+}
+
+// getStorageMode determines storage mode for a client
+func getStorageMode(clientID string) string {
+	if clientRegistry == nil {
+		return StorageModeSelfHosted
+	}
+
+	client, err := clientRegistry.GetClient(clientID)
+	if err != nil || client.APIEndpoint == "" {
+		return StorageModeSelfHosted
+	}
+
+	return StorageModeClientAPI
 }
 
 func loadOrGenerateKeys() {

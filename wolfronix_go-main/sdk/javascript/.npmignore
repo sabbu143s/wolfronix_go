@@ -1,0 +1,25 @@
+# Source files
+src/
+tsconfig.json
+
+# Test files
+**/*.test.ts
+**/*.spec.ts
+__tests__/
+test/
+coverage/
+
+# Config files
+.eslintrc*
+.prettierrc*
+.editorconfig
+.gitignore
+
+# Development
+.vscode/
+.idea/
+*.log
+.DS_Store
+
+# Build artifacts (we only want dist/)
+node_modules/

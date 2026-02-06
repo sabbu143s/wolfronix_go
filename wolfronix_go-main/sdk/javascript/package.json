@@ -1,0 +1,68 @@
+{
+  "name": "wolfronix-sdk",
+  "version": "1.0.0",
+  "description": "Official Wolfronix SDK for JavaScript/TypeScript - Zero-knowledge encryption made simple",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src --ext .ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "wolfronix",
+    "encryption",
+    "security",
+    "zero-knowledge",
+    "aes-256",
+    "file-encryption",
+    "crypto",
+    "privacy"
+  ],
+  "author": "Wolfronix Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wolfronix/sdk-javascript.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wolfronix/sdk-javascript/issues"
+  },
+  "homepage": "https://wolfronix.com/docs/sdk/javascript",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "peerDependencies": {
+    "node-fetch": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "node-fetch": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "wolfronix-sdk": "^1.0.0"
+  }
+}

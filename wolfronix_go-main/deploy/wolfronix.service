@@ -1,0 +1,18 @@
+[Unit]
+Description=Wolfronix Encryption Engine
+Documentation=https://wolfronix.com/docs
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/wolfronix/deploy
+ExecStart=/usr/bin/docker-compose -f docker-compose.prod.yml up -d
+ExecStop=/usr/bin/docker-compose -f docker-compose.prod.yml down
+ExecReload=/usr/bin/docker-compose -f docker-compose.prod.yml restart
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
