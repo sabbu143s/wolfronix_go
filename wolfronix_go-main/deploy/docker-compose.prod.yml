@@ -38,7 +38,11 @@ services:
       dockerfile: Dockerfile
     container_name: wolfronix_engine
     environment:
-      - DATABASE_URL=postgres://wolfuser:${DB_PASSWORD:-wolfpass123}@wolfronix_db:5432/wolfronix?sslmode=disable
+      - DB_HOST=wolfronix_db
+      - DB_PORT=5432
+      - DB_USER=wolfuser
+      - DB_PASS=${DB_PASSWORD:-wolfpass123}
+      - DB_NAME=wolfronix
       - WOLFRONIX_ENV=production
       - GOMEMLIMIT=24GiB
       - JWT_SECRET=${JWT_SECRET:-change-this-in-production}

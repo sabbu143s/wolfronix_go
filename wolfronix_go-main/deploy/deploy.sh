@@ -168,6 +168,11 @@ else
     echo -e "${GREEN}✓ Self-signed certificate generated${NC}"
 fi
 
+# Fix SSL permissions for nginx container
+chmod 755 "${SSL_DIR}"
+chmod 644 "${SSL_DIR}/fullchain.pem"
+chmod 644 "${SSL_DIR}/privkey.pem"
+
 chmod 600 "${SSL_DIR}"/*.pem
 
 # =============================================================================

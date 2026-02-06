@@ -205,6 +205,9 @@ func main() {
 	r := mux.NewRouter()
 	r.Use(corsMiddleware)
 
+	// Health check endpoint
+	r.HandleFunc("/health", healthCheckHandler).Methods("GET", "OPTIONS")
+
 	// API Routes
 	r.HandleFunc("/api/v1/keys", getKeysHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/api/v1/encrypt", encryptHandler).Methods("POST", "OPTIONS")
@@ -1297,6 +1300,38 @@ func publicKeyToPEM(pub *rsa.PublicKey) string {
 
 func privateKeyToPEM(priv *rsa.PrivateKey) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)}))
+}
+
+// Health check handler for monitoring
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	status := "healthy"
+	dbStatus := "connected"
+
+	// Check database connection
+	if db == nil {
+		dbStatus = "not initialized"
+	} else if err := db.Ping(); err != nil {
+		dbStatus = "disconnected"
+		status = "degraded"
+	}
+
+	response := map[string]interface{}{
+		"status":    status,
+		"service":   "wolfronix",
+		"version":   "1.0.0",
+		"database":  dbStatus,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if status == "healthy" {
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
