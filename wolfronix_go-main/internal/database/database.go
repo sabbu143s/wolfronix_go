@@ -17,6 +17,15 @@ type Client struct {
 	APIKey    string    `gorm:"unique;not null;index" json:"api_key"` // Indexed for speed
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Subscription & Quota Fields
+	Plan            string    `json:"plan"`             // STARTER, PRO, ENTERPRISE
+	APICallsLimit   int64     `json:"api_calls_limit"`  // Max API calls per month
+	APICallsUsed    int64     `json:"api_calls_used"`   // Current month API calls
+	SeatsLimit      int       `json:"seats_limit"`      // Max user seats
+	SeatsUsed       int       `json:"seats_used"`       // Current seats used
+	UsageResetDate  time.Time `json:"usage_reset_date"` // When to reset monthly usage
+	SubscriptionEnd time.Time `json:"subscription_end"` // When subscription expires
 }
 
 // 2. AUDIT TRAIL
@@ -31,10 +40,10 @@ type AuditLog struct {
 
 // 3. PERSISTENT MASTER KEYS (New!)
 type ServerMasterKey struct {
-	ID             uint   `gorm:"primaryKey"`
-	PublicKeyPEM   string `gorm:"type:text"`
-	PrivateKeyPEM  string `gorm:"type:text"`
-	CreatedAt      time.Time
+	ID            uint   `gorm:"primaryKey"`
+	PublicKeyPEM  string `gorm:"type:text"`
+	PrivateKeyPEM string `gorm:"type:text"`
+	CreatedAt     time.Time
 }
 
 func Connect(dbPath string) {
