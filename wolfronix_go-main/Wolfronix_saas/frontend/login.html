@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Wolfronix</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        /* Fixed input glow - removed blocking wrapper */
+        .input-field {
+            position: relative;
+            z-index: 2;
+        }
+
+        .input-field:focus {
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3);
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .btn-gradient {
+            background: linear-gradient(to right, #667eea, #764ba2);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-gradient::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+            pointer-events: none;
+        }
+
+        .btn-gradient:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .social-btn {
+            transition: all 0.3s;
+        }
+
+        .social-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-slide-in {
+            animation: slideIn 0.5s ease-out;
+        }
+    </style>
+</head>
+
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <div class="max-w-md w-full mx-auto rounded-2xl p-8 shadow-2xl bg-white dark:bg-gray-900 animate-slide-in">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h2 class="font-bold text-3xl text-gray-800 dark:text-white mb-2">
+                Welcome Back to <span class="gradient-text">Wolfronix</span>
+            </h2>
+            <p class="text-gray-600 dark:text-gray-400 text-sm">
+                Login to access your secure data platform
+            </p>
+        </div>
+
+        <!-- Login Form -->
+        <form id="loginForm" class="space-y-6" onsubmit="handleLogin(event)">
+            <div class="space-y-6">
+                <!-- Email Input -->
+                <div class="flex flex-col space-y-2">
+                    <label for="email" class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Email Address
+                    </label>
+                    <input type="email" id="email" placeholder="you@company.com"
+                        class="input-field flex h-12 w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-2 text-sm text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 transition"
+                        autocomplete="email" />
+                    <div id="emailError" class="text-red-500 text-xs hidden"></div>
+                </div>
+
+                <!-- Password Input -->
+                <div class="flex flex-col space-y-2">
+                    <label for="password" class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Password
+                    </label>
+                    <input type="password" id="password" placeholder="••••••••"
+                        class="input-field flex h-12 w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-2 text-sm text-gray-900 dark:text-white placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 transition"
+                        autocomplete="current-password" />
+                    <div id="passwordError" class="text-red-500 text-xs hidden"></div>
+                </div>
+            </div>
+            <!-- Remember Me & Forgot Password -->
+            <div class="flex items-center justify-between">
+                <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" id="remember"
+                        class="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500 cursor-pointer">
+                    <span class="text-sm text-gray-600 dark:text-gray-400">Remember me</span>
+                </label>
+                <a href="#" class="text-sm text-purple-600 hover:text-purple-700 dark:text-purple-400">
+                    Forgot password?
+                </a>
+            </div>
+
+            <!-- Login Button -->
+            <button type="submit"
+                class="btn-gradient relative w-full text-white rounded-lg h-12 font-medium shadow-lg hover:shadow-xl transition duration-300">
+                <span class="relative z-10">Sign in →</span>
+            </button>
+
+            <!-- Divider -->
+            <div class="relative my-8">
+                <div class="absolute inset-0 flex items-center">
+                    <div class="w-full border-t border-gray-300 dark:border-gray-700"></div>
+                </div>
+                <div class="relative flex justify-center text-sm">
+                    <span class="px-4 bg-white dark:bg-gray-900 text-gray-500">Or continue with</span>
+                </div>
+            </div>
+
+            <!-- Social Login Buttons -->
+            <div class="grid grid-cols-2 gap-4">
+                <button type="button"
+                    class="social-btn flex items-center justify-center space-x-2 px-4 h-12 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                    <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                            d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+                    </svg>
+                    <span class="text-sm font-medium text-gray-700 dark:text-gray-300">GitHub</span>
+                </button>
+                <button type="button" onclick="loginWithGoogle()"
+                    class="social-btn flex items-center justify-center space-x-2 px-4 h-12 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+                    <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                        <path
+                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                            fill="#4285F4" />
+                        <path
+                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                            fill="#34A853" />
+                        <path
+                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                            fill="#FBBC05" />
+                        <path
+                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                            fill="#EA4335" />
+                    </svg>
+                    <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Google</span>
+                </button>
+            </div>
+
+            <!-- Register Link -->
+            <p class="text-center text-sm text-gray-600 dark:text-gray-400 mt-6">
+                Don't have an account?
+                <a href="register.html" class="text-purple-600 hover:text-purple-700 dark:text-purple-400 font-medium">
+                    Sign up
+                </a>
+            </p>
+        </form>
+        <div id="mfaContainer" class="hidden space-y-6 text-center">
+            <div class="flex justify-center mb-4">
+                <div class="p-3 bg-purple-500/10 rounded-full">
+                    <svg class="w-8 h-8 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                </div>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 dark:text-white">Two-Factor Authentication</h3>
+            <p class="text-gray-600 dark:text-gray-400 text-sm">
+                We sent a verification request to your mobile device.
+            </p>
+            <p id="mfaPhoneDisplay" class="text-gray-800 dark:text-gray-200 font-medium text-sm"></p>
+
+            <button onclick="openPhoneVerify()"
+                class="btn-gradient relative w-full text-white rounded-lg h-12 font-medium shadow-lg hover:shadow-xl transition duration-300">
+                <span class="relative z-10">Verify with OTP</span>
+            </button>
+            <button onclick="cancelMfa()"
+                class="text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 mt-4">
+                Back to Login
+            </button>
+        </div>
+    </div>
+
+    <div class="pe_signin_button" data-client-id="14009490875141631747" style="position: absolute; left: -9999px;">
+    </div>
+    <script src="https://www.phone.email/sign_in_button_v1.js"></script>
+    <script src="auth.js"></script>
+    <script>
+        let tempMfaToken = localStorage.getItem('mfaTempToken') || null;
+        let mfaPhoneNumber = localStorage.getItem('mfaPhoneNumber') || null;
+
+        // Handle redirect flow from phone.email
+        (async function handleRedirectFlow() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const accessToken = urlParams.get('access_token');
+
+            if (accessToken && tempMfaToken) {
+                console.log("Redirect flow detected with access_token:", accessToken);
+
+                // Construct the user_json_url from access_token
+                const clientId = '14009490875141631747';
+                const userJsonUrl = `https://eapi.phone.email/getuser?access_token=${accessToken}&client_id=${clientId}`;
+                console.log("Constructed user_json_url:", userJsonUrl);
+
+                // Clear the URL parameters to prevent re-processing on refresh
+                window.history.replaceState({}, document.title, window.location.pathname);
+
+                try {
+                    // Show loading state
+                    document.getElementById('loginForm').classList.add('hidden');
+                    document.querySelector('.text-center.mb-8').innerHTML = '<p class="text-white">Verifying your phone... Please wait.</p>';
+
+                    await verifyMfaLogin(tempMfaToken, userJsonUrl);
+                    localStorage.removeItem('mfaTempToken');
+                    localStorage.removeItem('mfaPhoneNumber');
+
+                    document.querySelector('.text-center.mb-8').innerHTML = '<p class="text-green-400">Verification successful! Redirecting...</p>';
+                    setTimeout(() => window.location.href = 'dashboard.html', 1000);
+                } catch (error) {
+                    console.error("Redirect MFA Verification Error:", error);
+                    alert("Verification failed: " + error.message);
+                    // Show login form again
+                    document.getElementById('loginForm').classList.remove('hidden');
+                    document.querySelector('.text-center.mb-8').innerHTML = `
+                        <h1 class="text-3xl font-bold text-white">Welcome Back to</h1>
+                        <h2 class="text-3xl font-bold text-primary-400">Wolfronix</h2>
+                        <p class="text-gray-400 mt-2">Login to access your secure data platform</p>
+                    `;
+                    localStorage.removeItem('mfaTempToken');
+                    localStorage.removeItem('mfaPhoneNumber');
+                }
+            }
+        })();
+
+        // Called by auth.js handleLogin when mfaRequired is true
+        window.onMfaRequired = function (result) {
+            tempMfaToken = result.tempToken;
+            mfaPhoneNumber = result.phoneNumber || "";
+
+            // Store in sessionStorage for redirect flow
+            localStorage.setItem('mfaTempToken', tempMfaToken);
+            localStorage.setItem('mfaPhoneNumber', mfaPhoneNumber);
+
+            const fullPhone = mfaPhoneNumber;
+            const last4 = fullPhone.length > 4 ? fullPhone.slice(-4) : fullPhone;
+            const masked = last4 ? `Ending in ****${last4}` : "";
+
+            const displayEl = document.getElementById('mfaPhoneDisplay');
+            if (displayEl) displayEl.textContent = masked;
+
+            document.getElementById('loginForm').classList.add('hidden');
+            document.querySelector('.text-center.mb-8').classList.add('hidden');
+            document.getElementById('mfaContainer').classList.remove('hidden');
+        }
+
+        function cancelMfa() {
+            document.getElementById('mfaContainer').classList.add('hidden');
+            document.getElementById('loginForm').classList.remove('hidden');
+            document.querySelector('.text-center.mb-8').classList.remove('hidden');
+            tempMfaToken = null;
+            mfaPhoneNumber = null;
+            localStorage.removeItem('mfaTempToken');
+            localStorage.removeItem('mfaPhoneNumber');
+        }
+
+        function openPhoneVerify() {
+            let url = 'https://auth.phone.email/log-in?client_id=14009490875141631747';
+            if (mfaPhoneNumber) {
+                const cleanPhone = mfaPhoneNumber.replace(/[^+\d]/g, '');
+                url += `&phone_no=${encodeURIComponent(cleanPhone)}`;
+            }
+            // Use popup flow - phone.email SDK requires popup to communicate back
+            window.open(url, 'pe_login_window', 'toolbar=0,scrollbars=0,location=0,statusbar=0,menubar=0,resizable=0,width=500,height=560,top=' + (screen.height - 600) / 2 + ',left=' + (screen.width - 500) / 2);
+        }
+
+        // Phone Email Listener (callback for popup flow)
+        window.phoneEmailListener = async function (userObj) {
+            console.log("phoneEmailListener received:", userObj);
+            alert("DEBUG: Received userObj: " + JSON.stringify(userObj));
+
+            const { user_json_url } = userObj;
+
+            if (!tempMfaToken) return;
+
+            const btn = document.querySelector('#mfaContainer button');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = 'Verifying...';
+
+            try {
+                await verifyMfaLogin(tempMfaToken, user_json_url);
+                localStorage.removeItem('mfaTempToken');
+                localStorage.removeItem('mfaPhoneNumber');
+                showSuccess("Verification successful! Redirecting...");
+                setTimeout(() => window.location.href = 'dashboard.html', 1000);
+            } catch (error) {
+                console.error("MFA Verification Error:", error);
+                alert("Verification failed: " + error.message);
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+    </script>
+
+
+</body>
+
+</html>

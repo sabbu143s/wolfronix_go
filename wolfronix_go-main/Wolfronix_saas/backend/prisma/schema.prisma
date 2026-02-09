@@ -1,0 +1,130 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  firstName    String
+  lastName     String
+  email        String        @unique
+  phoneNumber  String?       @unique
+  passwordHash String?
+  company      String?
+  role         Role          @default(USER)
+  provider     String        @default("local")  // "local", "google", "github"
+  providerId   String?       // OAuth provider user ID
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  metrics      UserMetrics?
+  isMfaEnabled Boolean       @default(false)
+  subscription Subscription?
+  paymentMethods PaymentMethod[]
+  invoices     Invoice[]
+  
+  // Wolfronix API Key Integration
+  wolfronixApiKey    String?   @unique  // wfx_xxxxxxxxx
+  wolfronixClientId  String?            // saas_user_123
+  apiKeyCreatedAt    DateTime?          // When key was generated
+}
+
+model UserMetrics {
+  id                             Int      @id @default(autoincrement())
+  user                           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                         Int      @unique
+  protectedRecords               Int      @default(0)
+  protectedRecordsChangePercent  Float    @default(0)
+  activeLayers                   Int      @default(0)
+  activeLayersStatus             String   @default("All systems operational")
+  avgResponseTimeMs              Float    @default(0)
+  responseTimeImprovementPercent Float    @default(0)
+  securityAlerts                 Int      @default(0)
+  securityAlertsStatus           String   @default("System Secure")
+
+  // Cryptographic Metrics
+  encryptionCount                Int      @default(0)
+  avgEncryptionTimeMs            Float    @default(0)
+  decryptionCount                Int      @default(0)
+  avgDecryptionTimeMs            Float    @default(0)
+  
+  // Storing complex objects as JSON
+  activityHistory                Json?    // [{ date, encryptedRecords, maskedData }]
+  layerDistribution              Json?    // { staticMasking, dynamicMasking, ... }
+
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @updatedAt
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model Otp {
+  id        Int      @id @default(autoincrement())
+  type      String   // "signup", "login"
+  target    String   // phone number
+  code      String
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Subscription {
+  id              Int       @id @default(autoincrement())
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          Int       @unique
+  plan            String    @default("STARTER") // STARTER, PRO, ENTERPRISE
+  status          String    @default("ACTIVE")  // ACTIVE, CANCELED, PAST_DUE
+  startDate       DateTime  @default(now())
+  nextBillingDate DateTime
+  autoRenew       Boolean   @default(true)
+  razorpaySubId   String?
+  usage           Usage?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Usage {
+  id             Int          @id @default(autoincrement())
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscriptionId Int          @unique
+  apiCallsUsed   Int          @default(0)
+  apiCallsLimit  Int          @default(10000)
+  seatsUsed      Int          @default(1)
+  seatsLimit     Int          @default(3)
+  updatedAt      DateTime     @updatedAt
+}
+
+model PaymentMethod {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  cardBrand String   // Visa, Mastercard, etc.
+  last4     String
+  holder    String
+  expiry    String   // MM/YY
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Invoice {
+  id          Int      @id @default(autoincrement())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      Int
+  amount      Float
+  currency    String   @default("USD")
+  status      String   // PAID, PENDING, FAILED
+  date        DateTime @default(now())
+  description String
+  pdfUrl      String?
+  createdAt   DateTime @default(now())
+}

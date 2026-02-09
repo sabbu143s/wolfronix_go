@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Download Wolfronix - Enterprise Security Platform">
+    <title>Download - Wolfronix</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .dashboard-header {
+            background: var(--bg-primary);
+            border-bottom: 1px solid var(--border-color);
+            padding: var(--spacing-lg) 0;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+
+        .dashboard-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--gradient-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: var(--font-size-lg);
+        }
+
+        .user-details {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .user-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .user-email {
+            font-size: var(--font-size-sm);
+            color: var(--text-tertiary);
+        }
+
+        .logout-btn {
+            padding: var(--spacing-sm) var(--spacing-lg);
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all var(--transition-base);
+            font-weight: 500;
+        }
+
+        .logout-btn:hover {
+            background: var(--error);
+            color: white;
+            border-color: var(--error);
+        }
+
+        .welcome-banner {
+            background: var(--gradient-primary);
+            color: white;
+            padding: var(--spacing-2xl);
+            border-radius: var(--radius-xl);
+            margin-bottom: var(--spacing-2xl);
+            text-align: center;
+        }
+
+        .welcome-banner h1 {
+            color: white;
+            margin-bottom: var(--spacing-sm);
+        }
+
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .loading-spinner-large {
+            width: 60px;
+            height: 60px;
+            border: 4px solid var(--border-color);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-spinner-large"></div>
+    </div>
+
+    <!-- Dashboard Header -->
+    <header class="dashboard-header hidden" id="dashboardHeader">
+        <div class="container">
+            <div class="dashboard-nav">
+                <div class="auth-logo-modern">
+                    <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="40" height="40" rx="8" fill="url(#logo-gradient)" />
+                        <path d="M20 10L28 16V24L20 30L12 24V16L20 10Z" stroke="white" stroke-width="2"
+                            stroke-linejoin="round" />
+                        <circle cx="20" cy="20" r="3" fill="white" />
+                        <defs>
+                            <linearGradient id="logo-gradient" x1="0" y1="0" x2="40" y2="40">
+                                <stop stop-color="#0066FF" />
+                                <stop offset="1" stop-color="#9333EA" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <span
+                        style="font-weight: 700; font-size: 1.25rem; background: var(--gradient-primary); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Wolfronix</span>
+                </div>
+
+                <div class="user-info">
+                    <div class="user-avatar" id="userAvatar">U</div>
+                    <div class="user-details">
+                        <span class="user-name" id="userName">Loading...</span>
+                        <span class="user-email" id="userEmail"></span>
+                    </div>
+                    <button class="logout-btn" id="logoutBtn">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                            style="display: inline-block; vertical-align: middle; margin-right: 4px;">
+                            <path d="M6 14H3C2.4 14 2 13.6 2 13V3C2 2.4 2.4 2 3 2H6M11 11L14 8M14 8L11 5M14 8H6"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="hidden" id="mainContent" style="padding-top: var(--spacing-2xl);">
+        <div class="container">
+            <!-- Welcome Banner -->
+            <div class="welcome-banner">
+                <h1>Welcome to Wolfronix, <span id="welcomeName">User</span>! 🎉</h1>
+                <p style="margin: 0; font-size: var(--font-size-lg);">
+                    Your enterprise security platform is ready. Download and get started in minutes.
+                </p>
+            </div>
+
+            <!-- Rest of your existing download.html content goes here -->
+            <section style="padding: var(--spacing-2xl) 0;">
+                <div class="section-header">
+                    <span class="section-tag">Download</span>
+                    <h2 class="section-title">Get Started with Wolfronix</h2>
+                    <p class="section-subtitle">
+                        Choose your platform and start securing your data today
+                    </p>
+                </div>
+
+                <div class="features-grid" style="margin-top: var(--spacing-2xl);">
+                    <div class="feature-card" style="text-align: center;">
+                        <div class="feature-icon gradient-bg-1">
+                            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <rect x="8" y="8" width="24" height="24" rx="2" stroke="white" stroke-width="3" />
+                                <path d="M16 8V32M24 8V32M8 16H32M8 24H32" stroke="white" stroke-width="3" />
+                            </svg>
+                        </div>
+                        <h3>Windows</h3>
+                        <p>Windows 10/11 (64-bit)</p>
+                        <a href="#" class="btn btn-primary" style="margin-top: var(--spacing-md);">
+                            Download for Windows
+                        </a>
+                    </div>
+
+                    <div class="feature-card" style="text-align: center;">
+                        <div class="feature-icon gradient-bg-2">
+                            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <path d="M20 5L8 11V19C8 26 13 31.5 20 33C27 31.5 32 26 32 19V11L20 5Z" stroke="white"
+                                    stroke-width="3" />
+                            </svg>
+                        </div>
+                        <h3>macOS</h3>
+                        <p>macOS 11 Big Sur or later</p>
+                        <a href="#" class="btn btn-primary" style="margin-top: var(--spacing-md);">
+                            Download for macOS
+                        </a>
+                    </div>
+
+                    <div class="feature-card" style="text-align: center;">
+                        <div class="feature-icon gradient-bg-3">
+                            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                                <circle cx="20" cy="20" r="14" stroke="white" stroke-width="3" />
+                                <path d="M20 6V20L28 28" stroke="white" stroke-width="3" />
+                            </svg>
+                        </div>
+                        <h3>Linux</h3>
+                        <p>Ubuntu, Debian, CentOS</p>
+                        <a href="#" class="btn btn-primary" style="margin-top: var(--spacing-md);">
+                            Download for Linux
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Docker Instructions -->
+                <div
+                    style="margin-top: var(--spacing-2xl); padding: var(--spacing-2xl); background: var(--bg-secondary); border-radius: var(--radius-xl);">
+                    <h3 style="margin-bottom: var(--spacing-md);">Quick Start with Docker</h3>
+                    <pre
+                        style="background: var(--bg-tertiary); padding: var(--spacing-lg); border-radius: var(--radius-md); overflow-x: auto;">
+<code>docker pull wolfronix/security-platform:latest
+docker run -d -p 8080:8080 wolfronix/security-platform</code>
+                    </pre>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
+    <script src="auth.js"></script>
+    <script>
+        // ============================================
+        // PAGE PROTECTION & USER INFO
+        // ============================================
+
+        async function initializePage() {
+            // Protect page - redirect to login if not authenticated
+            const user = await WolfronixAuth.protectPage();
+
+            if (user) {
+                // Update UI with user info
+                document.getElementById('userName').textContent = `${user.firstName} ${user.lastName}`;
+                document.getElementById('userEmail').textContent = user.email;
+                document.getElementById('welcomeName').textContent = user.firstName;
+
+                // Set avatar initial
+                const initials = `${user.firstName[0]}${user.lastName[0]}`.toUpperCase();
+                document.getElementById('userAvatar').textContent = initials;
+
+                // Hide loading, show content
+                document.getElementById('loadingScreen').classList.add('hidden');
+                document.getElementById('dashboardHeader').classList.remove('hidden');
+                document.getElementById('mainContent').classList.remove('hidden');
+            }
+        }
+
+        // Logout handler
+        document.getElementById('logoutBtn').addEventListener('click', async () => {
+            if (confirm('Are you sure you want to logout?')) {
+                await WolfronixAuth.logout();
+            }
+        });
+
+        // Initialize on page load
+        initializePage();
+    </script>
+</body>
+
+</html>

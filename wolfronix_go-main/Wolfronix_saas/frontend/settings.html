@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings - Wolfronix Security</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            dark: {
+              900: '#0B0F15',
+              800: '#151A21',
+              700: '#1E2530',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #0B0F15;
+      color: #E2E8F0;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #0B0F15;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #2D3748;
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #4A5568;
+    }
+
+    .nav-link.active {
+      background-color: rgba(59, 130, 246, 0.1);
+      color: #3B82F6;
+      border-right: 3px solid #3B82F6;
+    }
+
+    .nav-link {
+      transition: all 0.2s;
+      border-right: 3px solid transparent;
+    }
+
+    .nav-link:hover:not(.active) {
+      background-color: rgba(255, 255, 255, 0.03);
+      color: #F8FAFC;
+    }
+
+    .bento-card {
+      background-color: #151A21;
+      border: 1px solid #1E2530;
+      border-radius: 12px;
+      padding: 1.5rem;
+      transition: all 0.2s ease-in-out;
+    }
+
+    .bento-card:hover {
+      border-color: #2D3748;
+    }
+  </style>
+</head>
+
+<body class="h-screen flex overflow-hidden font-sans antialiased text-gray-300">
+
+  <!-- Sidebar -->
+  <aside class="w-64 bg-[#151A21] border-r border-[#1E2530] flex flex-col z-20 flex-shrink-0">
+    <div class="h-16 flex items-center px-6 border-b border-[#1E2530]">
+      <div
+        class="w-8 h-8 rounded bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mr-3 shadow-lg shadow-blue-500/20">
+        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+        </svg>
+      </div>
+      <span
+        class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">Wolfronix</span>
+    </div>
+    <nav class="flex-1 py-6 space-y-1">
+      <a href="dashboard.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+          class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2z" />
+        </svg>Overview</a>
+      <a href="api.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+          class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+        </svg>API Access</a>
+      <a href="subscription.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+          class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+        </svg>Subscription</a>
+      <a href="docs.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+          class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+        </svg>Documentation</a>
+      <a href="settings.html" class="nav-link active flex items-center px-6 py-3 text-sm font-medium"><svg
+          class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>Settings</a>
+    </nav>
+    <div class="p-4 border-t border-[#1E2530]">
+      <div class="flex items-center">
+        <div id="userInitials"
+          class="w-9 h-9 rounded-full bg-gray-700 flex items-center justify-center text-sm font-bold text-white">...
+        </div>
+        <div class="ml-3 truncate">
+          <p id="dashboardUserName" class="text-sm font-medium text-white">...</p>
+          <p id="dashboardUserEmail" class="text-xs text-gray-500 truncate">...</p>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0B0F15]">
+    <!-- Header -->
+    <header
+      class="h-16 flex items-center justify-between px-8 border-b border-[#1E2530] bg-[#151A21]/50 backdrop-blur-sm sticky top-0 z-30">
+      <div>
+        <h2 class="text-xl font-semibold text-white">Settings</h2>
+      </div>
+      <button onclick="logout()"
+        class="px-3 py-1.5 text-xs font-medium text-gray-300 hover:text-white bg-[#1E2530] hover:bg-[#2D3748] rounded border border-[#2D3748] transition">
+        Log out
+      </button>
+    </header>
+
+    <!-- Content -->
+    <div class="p-8 overflow-y-auto flex-1">
+      <div class="max-w-4xl mx-auto space-y-8">
+
+        <!-- User Profile -->
+        <div class="bento-card">
+          <div class="mb-6">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="w-1.5 h-6 bg-blue-500 rounded-full"></div>
+              <h3 class="text-lg font-semibold text-white">User Profile</h3>
+            </div>
+            <p class="text-sm text-gray-400">Update your basic account information</p>
+          </div>
+
+          <form class="space-y-4" id="profileForm">
+            <div class="grid md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2" for="firstName">First name</label>
+                <input id="firstName" type="text"
+                  class="w-full px-4 py-2.5 rounded-lg bg-[#0B0F15] border border-[#1E2530] text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                  placeholder="John" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2" for="lastName">Last name</label>
+                <input id="lastName" type="text"
+                  class="w-full px-4 py-2.5 rounded-lg bg-[#0B0F15] border border-[#1E2530] text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                  placeholder="Doe" />
+              </div>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2" for="email">Email</label>
+                <input id="email" type="email"
+                  class="w-full px-4 py-2.5 rounded-lg bg-[#0B0F15] border border-[#1E2530] text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2" for="phoneNumber">Phone Number</label>
+                <input id="phoneNumber" type="tel"
+                  class="w-full px-4 py-2.5 rounded-lg bg-[#0B0F15] border border-[#1E2530] text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
+              </div>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2" for="company">Company</label>
+                <input id="company" type="text"
+                  class="w-full px-4 py-2.5 rounded-lg bg-[#0B0F15] border border-[#1E2530] text-sm text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                  placeholder="Your company" />
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-3 pt-4 border-t border-[#1E2530]">
+              <button type="button" onclick="loadUser()"
+                class="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white bg-[#1E2530] hover:bg-[#2D3748] rounded-lg border border-[#2D3748] transition">
+                Reset
+              </button>
+              <button type="button" onclick="saveProfile()"
+                class="px-4 py-2 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition">
+                Save changes
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- MFA -->
+        <div class="bento-card">
+          <div class="mb-6">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <div class="w-1.5 h-6 bg-emerald-500 rounded-full"></div>
+                <h3 class="text-lg font-semibold text-white">Multi-Factor Authentication</h3>
+              </div>
+              <span id="mfaStatusBadge"
+                class="px-3 py-1 rounded-full text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
+                Disabled
+              </span>
+            </div>
+            <p class="text-sm text-gray-400 mt-2">Add an extra layer of security to your account</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6">
+            <div class="space-y-3 text-sm text-gray-300">
+              <p class="font-medium text-white">Why enable MFA?</p>
+              <ul class="space-y-2">
+                <li class="flex items-start gap-2">
+                  <svg class="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor"
+                    viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>Protects your account if password is compromised</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor"
+                    viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>Works with any authenticator app</span>
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor"
+                    viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>Recommended for all API users</span>
+                </li>
+              </ul>
+            </div>
+
+            <div class="space-y-4">
+              <div class="bg-[#0B0F15] border border-[#1E2530] rounded-lg p-4">
+                <h4 class="text-sm font-semibold text-white mb-2">Enable MFA</h4>
+                <p class="text-xs text-gray-400 mb-3">
+                  Click below to start setup. A QR code will be shown.
+                </p>
+                <button type="button" onclick="toggleMfa()" id="mfaToggleBtn"
+                  class="w-full px-4 py-2 text-sm bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-medium transition">
+                  Enable MFA
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Session Management -->
+        <div class="bento-card">
+          <div class="mb-6">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="w-1.5 h-6 bg-red-500 rounded-full"></div>
+              <h3 class="text-lg font-semibold text-white">Active Sessions</h3>
+            </div>
+            <p class="text-sm text-gray-400">Manage where you're signed in</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6">
+            <div class="bg-[#0B0F15] border border-[#1E2530] rounded-lg p-5">
+              <h4 class="text-sm font-semibold text-white mb-3">Current Session</h4>
+              <div class="space-y-2 text-xs text-gray-400 mb-4">
+                <p>Browser: <span id="browserInfo" class="text-gray-300">Current browser</span></p>
+                <p>Last activity: <span class="text-gray-300">Just now</span></p>
+              </div>
+              <button type="button" onclick="handleLogoutCurrent()"
+                class="w-full px-4 py-2 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/20 transition font-medium">
+                Logout from this device
+              </button>
+            </div>
+
+            <div class="bg-[#0B0F15] border border-[#1E2530] rounded-lg p-5">
+              <h4 class="text-sm font-semibold text-white mb-3">All Devices</h4>
+              <p class="text-xs text-gray-400 mb-4">
+                Sign out from all devices where you're logged in. Use this if you lost a device.
+              </p>
+              <button type="button" onclick="handleLogoutAll()"
+                class="w-full px-4 py-2 text-xs bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition">
+                Logout from all devices
+              </button>
+              <p id="logoutMessage" class="text-xs text-green-400 mt-2 hidden">All sessions logged out (demo)</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- Hidden Phone.Email Button -->
+  <div class="pe_signin_button" data-client-id="14009490875141631747" style="position: absolute; left: -9999px;"></div>
+  <script src="https://www.phone.email/sign_in_button_v1.js"></script>
+  <script src="auth.js"></script>
+  <script>
+    // API_BASE is already declared in auth.js
+
+    // Phone Email Listener
+    window.phoneEmailListener = async function (userObj) {
+      const { user_json_url, user_country_code, user_phone_number } = userObj;
+
+      // We need the access token, but the listener gives file URL.
+      // If we strictly follow the 'phone.email' docs, we might send the user_json_url to backend?
+      // But our backend expects a token to call getuser.
+      // Actually, the user_json_url contains a JWT/Token usually.
+      // Let's assume (based on typical flow) that we verify match locally for now to proceed, 
+      // OR we just send the user_json_url as the "token" and the backend fetches it?
+
+      // Let's TRY to find the access_token in the object. It is often typically available.
+      // If not, we might need to adjust.
+      // For now, let's assume we can get a token or use the JSON URL as proof.
+
+      // Let's try to verify by sending the user_json_url as the 'phoneToken' 
+      // and update backend to fetch that URL? 
+      // NO, let's stick to the backend helper I wrote: /getuser. 
+      // This implies we have an access_token.
+      // The phone.email popup usually redirects with access_token in URL if used as link.
+
+      // Alternative: Use the verified phone number directly? NO, insecure.
+
+      // Let's assume we send the user_json_url to the backend, and the backend verifies it.
+      // I will update the backend helper to fetch the JSON URL if it looks like a URL.
+
+      await enableMfaBackend(user_json_url);
+    }
+
+    async function saveProfile() {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        window.location.href = "login.html";
+        return;
+      }
+
+      const firstName = document.getElementById("firstName").value.trim();
+      const lastName = document.getElementById("lastName").value.trim();
+      const company = document.getElementById("company").value.trim();
+      const email = document.getElementById("email").value.trim();
+      const phoneNumber = document.getElementById("phoneNumber").value.trim();
+
+      const btn = document.querySelector('button[onclick="saveProfile()"]');
+      const originalText = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = "Saving...";
+
+      try {
+        const res = await fetch(`${API_BASE}/user/me`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ firstName, lastName, company, email, phoneNumber })
+        });
+
+        if (!res.ok) throw new Error("Update failed");
+
+        const updatedUser = await res.json();
+
+        // Update sidebar info immediately
+        const sidebarName = document.getElementById("dashboardUserName");
+        const sidebarInit = document.getElementById("userInitials");
+        if (sidebarName) sidebarName.textContent = updatedUser.firstName + " " + updatedUser.lastName;
+        if (sidebarInit) sidebarInit.textContent = updatedUser.firstName[0].toUpperCase() + updatedUser.lastName[0].toUpperCase();
+
+        showSuccess("Profile updated successfully");
+      } catch (err) {
+        console.error(err);
+        alert("Failed to update profile. Please try again.");
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+      }
+    }
+
+    let mfaEnabled = false;
+
+    function updateMfaUI() {
+      const badge = document.getElementById('mfaStatusBadge');
+      const btn = document.getElementById('mfaToggleBtn');
+      if (!badge || !btn) return;
+
+      if (mfaEnabled) {
+        badge.textContent = 'Enabled';
+        badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+        btn.textContent = 'Disable MFA';
+        btn.className = 'w-full px-4 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition';
+        btn.onclick = disableMfa;
+      } else {
+        badge.textContent = 'Disabled';
+        badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20';
+        btn.textContent = 'Enable MFA';
+        btn.className = 'w-full px-4 py-2 text-sm bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-medium transition';
+        btn.onclick = openPhoneEmailPopup;
+      }
+    }
+
+    function toggleMfa() {
+      // Delegated to updateMfaUI onclick handlers
+    }
+
+    loadUser();
+
+    function openPhoneEmailPopup() {
+      // Direct enable flow based on user requirement
+      if (!confirm("Are you sure you want to enable MFA? You must have a registered phone number.")) return;
+
+      enableMfaBackend();
+    }
+
+    async function enableMfaBackend() {
+      const btn = document.getElementById('mfaToggleBtn');
+      const originalText = btn ? btn.innerHTML : '';
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = "Enabling...";
+      }
+
+      try {
+        const token = localStorage.getItem("token");
+        const res = await fetch(`${API_BASE}/user/mfa/enable`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({}) // No token needed now
+        });
+
+        if (res.ok) {
+          showSuccess("MFA Enabled Successfully");
+          mfaEnabled = true;
+          updateMfaUI();
+        } else {
+          const data = await res.json();
+          alert(data.message || "Failed to enable MFA");
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Error enabling MFA");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          if (!mfaEnabled) btn.innerHTML = originalText;
+        }
+      }
+    }
+
+    async function disableMfa() {
+      if (!confirm("Are you sure you want to disable MFA?")) return;
+
+      try {
+        const token = localStorage.getItem("token");
+        const res = await fetch(`${API_BASE}/user/mfa/disable`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (res.ok) {
+          mfaEnabled = false;
+          updateMfaUI();
+          showSuccess("MFA Disabled");
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Wrap loadUser to update MFA status
+    const originalLoadUser = loadUser; // If loadUser is global from script below line 327
+    // Actually lines 327 calls loadUser() immediately.
+    // I should modify loadUser definition inside the script or the global one?
+    // loadUser is defined in settings.html at line 277 (wait, no, it's lines 277 in PREVIOUS view_file? No, line 277 is from auth.js? No.)
+    // loadUser is defined in settings.html lines 277-327.
+
+    // I will overwrite loadUser to include MFA check
+    async function loadUser() {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        window.location.href = "login.html";
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/user/me`, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+
+        if (!res.ok) {
+          console.error("Failed to load user:", await res.text());
+          localStorage.removeItem("token");
+          window.location.href = "login.html";
+          return;
+        }
+
+        const user = await res.json();
+
+        const nameEl = document.getElementById("dashboardUserName");
+        const emailEl = document.getElementById("dashboardUserEmail");
+        const initEl = document.getElementById("userInitials");
+
+        if (nameEl) nameEl.textContent = `${user.firstName} ${user.lastName}`;
+        if (emailEl) emailEl.textContent = user.email;
+        if (initEl) initEl.textContent =
+          user.firstName[0].toUpperCase() + user.lastName[0].toUpperCase();
+
+        if (document.getElementById("firstName")) {
+          const setField = (id, val, defaultPlaceholder) => {
+            const el = document.getElementById(id);
+            if (el) {
+              el.value = val || "";
+              el.placeholder = val || defaultPlaceholder;
+            }
+          };
+
+          setField("firstName", user.firstName, "John");
+          setField("lastName", user.lastName, "Doe");
+          setField("email", user.email, "company@example.com");
+          setField("phoneNumber", user.phoneNumber, "+1234567890");
+          setField("company", user.company, "Your company");
+        }
+
+        // MFA Status
+        mfaEnabled = !!user.isMfaEnabled;
+        updateMfaUI();
+
+      } catch (error) {
+        console.error("Error loading user:", error);
+      }
+    }
+
+    function handleLogoutCurrent() {
+      logout();
+    }
+
+    function handleLogoutAll() {
+      const msg = document.getElementById('logoutMessage');
+      if (msg) {
+        msg.classList.remove('hidden');
+        setTimeout(() => {
+          msg.classList.add('hidden');
+          logout();
+        }, 1500);
+      } else {
+        logout();
+      }
+    }
+
+    document.getElementById('browserInfo').textContent = navigator.userAgent.split(') ')[0] + ')';
+  </script>
+</body>
+
+</html>

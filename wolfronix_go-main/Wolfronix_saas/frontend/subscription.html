@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription - Wolfronix Security</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+
+    <!-- Dependencies -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Tailwind Config -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        display: ['Outfit', 'sans-serif'], // For Headings/Price
+                    },
+                    colors: {
+                        dark: {
+                            900: '#0B0F15', // Main bg
+                            800: '#151A21', // Sidebar/Card bg
+                            700: '#1E2530', // Border/Hover
+                        }
+                    },
+                    boxShadow: {
+                        'glow-blue': '0 0 20px rgba(59, 130, 246, 0.15)',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #0B0F15;
+            color: #E2E8F0;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0B0F15;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #2D3748;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4A5568;
+        }
+
+        /* Nav Links */
+        .nav-link.active {
+            background-color: rgba(59, 130, 246, 0.1);
+            color: #3B82F6;
+            border-right: 3px solid #3B82F6;
+        }
+
+        .nav-link {
+            transition: all 0.2s;
+            border-right: 3px solid transparent;
+        }
+
+        .nav-link:hover:not(.active) {
+            background-color: rgba(255, 255, 255, 0.03);
+            color: #F8FAFC;
+        }
+
+        /* ===== RESTORED STYLES FOR USAGE & PRO CARD ===== */
+        .brand-blue {
+            color: #3B82F6;
+        }
+
+        /* Usage Card 3D */
+        .usage-card-3d {
+            transition: all 0.3s ease;
+            transform-style: preserve-3d;
+            will-change: transform;
+        }
+
+        .usage-card-3d:hover {
+            box-shadow: 0 20px 40px rgba(59, 130, 246, 0.3);
+        }
+
+        .usage-bar {
+            transition: width 1s ease-in-out;
+        }
+
+        /* Pro Card Original (Preserved) */
+        .plan-card-pro-original {
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .plan-card-pro-original:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.5);
+        }
+
+        .plan-card-pro-original.featured {
+            border: 2px solid #3B82F6;
+            box-shadow: 0 10px 30px rgba(59, 130, 246, 0.15);
+        }
+
+        /* New Premium Styles */
+        .glass-credit-card {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.9), rgba(79, 70, 229, 0.9));
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .glass-credit-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.2) 0%, transparent 60%);
+            transform: rotate(45deg);
+            pointer-events: none;
+        }
+
+        .glass-credit-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 35px rgba(59, 130, 246, 0.3);
+        }
+
+        .premium-plan-card {
+            background: linear-gradient(to bottom, #151A21, #0B0F15);
+            border: 1px solid #1E2530;
+            border-radius: 16px;
+            transition: all 0.3s ease;
+        }
+
+        .premium-plan-card:hover {
+            border-color: #3B82F6;
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.1);
+        }
+
+        /* Toggle switches */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 26px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #1E2530;
+            transition: .4s;
+            border-radius: 30px;
+            border: 1px solid #2D3748;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        input:checked+.toggle-slider {
+            background-color: #3B82F6;
+            border-color: #3B82F6;
+        }
+
+        input:checked+.toggle-slider:before {
+            transform: translateX(22px);
+        }
+
+        .bento-card {
+            background-color: #151A21;
+            border: 1px solid #1E2530;
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        /* Custom Currency Dropdown */
+        .custom-dropdown {
+            position: relative;
+            width: 280px;
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+            z-index: 50;
+        }
+
+        .dropdown-trigger {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #E2E8F0;
+            padding: 10px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.15s;
+        }
+
+        .dropdown-trigger:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #3B82F6;
+        }
+
+        .dropdown-arrow {
+            transition: transform 0.15s;
+            opacity: 0.7;
+        }
+
+        .custom-dropdown.open .dropdown-arrow {
+            transform: rotate(180deg);
+            color: #3B82F6;
+            opacity: 1;
+        }
+
+        .dropdown-options {
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            right: 0;
+            background: rgba(21, 26, 33, 0.98);
+            border: 1px solid #1E2530;
+            border-radius: 12px;
+            overflow: hidden;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-10px);
+            transition: all 0.2s;
+            z-index: 100;
+            max-height: 220px;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            padding: 6px 0;
+        }
+
+        .custom-dropdown.open .dropdown-options {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .dropdown-option {
+            padding: 10px 16px;
+            cursor: pointer;
+            transition: all 0.15s;
+            color: #94A3B8;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+        }
+
+        .dropdown-option:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: #F8FAFC;
+        }
+
+        .dropdown-option.selected {
+            background: rgba(59, 130, 246, 0.1);
+            color: #3B82F6;
+        }
+    </style>
+</head>
+
+<body class="h-screen flex overflow-hidden font-sans antialiased text-gray-300">
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-[#151A21] border-r border-[#1E2530] flex flex-col z-20 flex-shrink-0">
+        <div class="h-16 flex items-center px-6 border-b border-[#1E2530]">
+            <div
+                class="w-8 h-8 rounded bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mr-3 shadow-lg shadow-blue-500/20">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+            </div>
+            <span class="text-xl font-bold font-display text-white">Wolfronix</span>
+        </div>
+        <nav class="flex-1 py-6 space-y-1">
+            <a href="dashboard.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+                    class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2z" />
+                </svg>Overview</a>
+            <a href="api.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+                    class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                </svg>API Access</a>
+            <a href="subscription.html" class="nav-link active flex items-center px-6 py-3 text-sm font-medium"><svg
+                    class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                </svg>Subscription</a>
+            <a href="docs.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+                    class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                </svg>Documentation</a>
+            <a href="settings.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400"><svg
+                    class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>Settings</a>
+        </nav>
+        <div class="p-4 border-t border-[#1E2530]">
+            <div class="flex items-center">
+                <div id="userInitials"
+                    class="w-9 h-9 rounded-full bg-gray-700 flex items-center justify-center text-sm font-bold text-white">
+                    ...</div>
+                <div class="ml-3 truncate">
+                    <p id="dashboardUserName" class="text-sm font-medium text-white">...</p>
+                    <p id="dashboardUserEmail" class="text-xs text-gray-500 truncate">...</p>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0B0F15]">
+        <!-- Header -->
+        <header
+            class="h-16 flex items-center justify-between px-8 border-b border-[#1E2530] bg-[#151A21]/50 backdrop-blur-sm sticky top-0 z-30">
+            <h1 class="text-xl font-semibold text-white font-display">Subscription Management</h1>
+            <button onclick="logout()"
+                class="px-3 py-1.5 text-xs font-medium text-gray-300 hover:text-white bg-[#1E2530] hover:bg-[#2D3748] rounded border border-[#2D3748] transition">Log
+                out</button>
+        </header>
+
+        <!-- Content -->
+        <div class="p-8 overflow-y-auto custom-scrollbar flex-1">
+            <div class="max-w-6xl mx-auto space-y-10">
+
+                <!-- RESTORED 3D USAGE CARDS -->
+                <div>
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-lg font-bold text-white font-display">Current Usage</h3>
+                    </div>
+                    <!-- Usage Stats Grid with 3D Effect (Preserved) -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <!-- API Calls Card -->
+                        <div class="usage-card-3d bg-white/[0.02] rounded-lg p-5 border border-white/10 relative overflow-hidden group"
+                            data-card="api">
+                            <div
+                                class="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent opacity-0 group-hover:opacity-100 transition duration-500">
+                            </div>
+                            <div class="flex items-center justify-between mb-3 relative z-10">
+                                <p class="text-sm text-gray-400">API Calls Used</p>
+                                <svg class="w-5 h-5 text-blue-500" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                </svg>
+                            </div>
+                            <p class="text-2xl font-bold text-white mb-2 relative z-10 font-display">75,432</p>
+                            <div class="flex items-center justify-between mb-2 relative z-10">
+                                <p class="text-xs text-gray-500">of 100,000</p>
+                                <p class="text-xs font-semibold text-blue-500">75%</p>
+                            </div>
+                            <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden relative z-10">
+                                <div class="usage-bar h-2 bg-blue-500" style="width: 75%"></div>
+                            </div>
+                        </div>
+
+                        <!-- Active Users Card -->
+                        <div class="usage-card-3d bg-white/[0.02] rounded-lg p-5 border border-white/10 relative overflow-hidden group"
+                            data-card="users">
+                            <div
+                                class="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent opacity-0 group-hover:opacity-100 transition duration-500">
+                            </div>
+                            <div class="flex items-center justify-between mb-3 relative z-10">
+                                <p class="text-sm text-gray-400">Active Users</p>
+                                <svg class="w-5 h-5 text-purple-500" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                                </svg>
+                            </div>
+                            <p class="text-2xl font-bold text-white mb-2 relative z-10 font-display">8</p>
+                            <div class="flex items-center justify-between mb-2 relative z-10">
+                                <p class="text-xs text-gray-500">of 10 seats</p>
+                                <p class="text-xs font-semibold text-purple-500">80%</p>
+                            </div>
+                            <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden relative z-10">
+                                <div class="usage-bar h-2 bg-purple-500" style="width: 80%"></div>
+                            </div>
+                        </div>
+
+                        <!-- Billing Cycle Card -->
+                        <div class="usage-card-3d bg-white/[0.02] rounded-lg p-5 border border-white/10 relative overflow-hidden group"
+                            data-card="billing">
+                            <div
+                                class="absolute inset-0 bg-gradient-to-br from-green-500/10 to-transparent opacity-0 group-hover:opacity-100 transition duration-500">
+                            </div>
+                            <div class="flex items-center justify-between mb-3 relative z-10">
+                                <p class="text-sm text-gray-400">Billing Cycle</p>
+                                <svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                            </div>
+                            <p class="text-2xl font-bold text-white mb-2 relative z-10 font-display">41 days</p>
+                            <div class="flex items-center justify-between mb-2 relative z-10">
+                                <p class="text-xs text-gray-500">Renews: Jan 12, 2026</p>
+                            </div>
+                            <div class="flex items-center gap-2 mt-3 relative z-10">
+                                <span class="text-xs px-2 py-1 bg-green-500/10 text-green-400 rounded">Auto-renew
+                                    ON</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- NEW UPGRADED PAYMENT & PLANS -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Payment Method (Upgraded Glassmorphism) -->
+                    <div class="bento-card relative overflow-hidden">
+                        <div class="flex items-center justify-between mb-6">
+                            <h4 class="text-lg font-bold text-white font-display">Payment Method</h4>
+                            <button
+                                class="text-sm text-blue-400 hover:text-white transition flex items-center gap-1 font-medium"><span
+                                    class="text-lg leading-none">+</span> Add New</button>
+                        </div>
+
+                        <!-- Credit Card -->
+                        <div class="glass-credit-card rounded-2xl p-6 mb-6 shadow-2xl relative z-10">
+                            <div class="flex justify-between items-start mb-8">
+                                <div
+                                    class="w-12 h-8 bg-gradient-to-br from-yellow-200 to-yellow-500 rounded-md shadow-inner border border-yellow-600/30">
+                                </div>
+                                <svg class="h-8 w-auto text-white opacity-90" viewBox="0 0 48 48" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <path
+                                        d="M14.2 3.8C13.8 3.8 13.4 3.9 13.1 4.2L2.5 15.3C1.9 16 2.4 17 3.3 17H12.8L9.9 30.6C9.8 31.1 10.3 31.6 10.8 31.4L23.4 25.1L14.2 3.8Z"
+                                        fill="currentColor" />
+                                    <path d="M30 4.2L18.8 25.5L32.2 18.8L35.2 4.6C35.3 4.1 34.8 3.6 34.3 3.8L30 4.2Z"
+                                        fill="currentColor" />
+                                    <path d="M43.8 3.8H34.3L31.3 18.1L45.2 4.6C45.5 4.3 45.1 3.8 44.7 3.8H43.8Z"
+                                        fill="currentColor" />
+                                </svg>
+                            </div>
+                            <p
+                                class="text-white text-2xl tracking-widest mb-6 font-display font-medium shadow-black/10 drop-shadow-md">
+                                •••• •••• •••• 1234</p>
+                            <div class="flex justify-between items-end text-white/90">
+                                <div>
+                                    <p class="text-[10px] uppercase tracking-wider opacity-70 mb-1">Card Holder</p>
+                                    <p class="font-medium tracking-wide">SHABARISH R</p>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] uppercase tracking-wider opacity-70 mb-1">Expires</p>
+                                    <p class="font-medium tracking-wide">12/28</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div
+                            class="flex items-center justify-between p-4 bg-[#0B0F15] rounded-xl border border-[#1E2530]">
+                            <div>
+                                <span class="text-xs text-gray-500 block mb-0.5">Next billing date</span>
+                                <span class="text-sm text-white font-medium">Dec 12, 2025</span>
+                            </div>
+                            <span class="text-xs font-mono bg-[#1E2530] text-gray-400 px-2 py-1 rounded">Auto-pay
+                                Enabled</span>
+                        </div>
+                    </div>
+
+                    <!-- Billing History (Clean List) -->
+                    <div class="bento-card">
+                        <div class="flex items-center justify-between mb-6">
+                            <h4 class="text-lg font-bold text-white font-display">Billing History</h4>
+                            <button class="text-xs font-medium text-gray-400 hover:text-white transition">View
+                                All</button>
+                        </div>
+                        <div class="space-y-2">
+                            <!-- Item -->
+                            <div
+                                class="flex items-center justify-between p-3 rounded-lg hover:bg-[#1E2530] transition group cursor-pointer border border-transparent hover:border-[#2D3748]">
+                                <div class="flex items-center gap-4">
+                                    <div
+                                        class="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center text-green-500 border border-green-500/10">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-white font-medium">Pro Plan - Monthly</p>
+                                        <p class="text-xs text-gray-500">Dec 12, 2024 &bull; Invoice #001</p>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-sm text-white font-medium mb-0.5">$29.00</p>
+                                    <span
+                                        class="text-[10px] text-blue-400 opacity-0 group-hover:opacity-100 transition uppercase tracking-wider font-semibold">Download
+                                        PDF</span>
+                                </div>
+                            </div>
+                            <!-- Item -->
+                            <div
+                                class="flex items-center justify-between p-3 rounded-lg hover:bg-[#1E2530] transition group cursor-pointer border border-transparent hover:border-[#2D3748]">
+                                <div class="flex items-center gap-4">
+                                    <div
+                                        class="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center text-green-500 border border-green-500/10">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-white font-medium">Pro Plan - Monthly</p>
+                                        <p class="text-xs text-gray-500">Nov 12, 2024 &bull; Invoice #012</p>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-sm text-white font-medium mb-0.5">$29.00</p>
+                                    <span
+                                        class="text-[10px] text-blue-400 opacity-0 group-hover:opacity-100 transition uppercase tracking-wider font-semibold">Download
+                                        PDF</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Upgrade Plan (Refined) -->
+                <div>
+                    <div class="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+                        <div>
+                            <h2 class="text-2xl font-bold text-white font-display">Available Plans</h2>
+                            <p class="text-sm text-gray-400 mt-1">Upgrade or downgrade at any time</p>
+                        </div>
+                        <div class="flex items-center gap-4 flex-wrap">
+                            <!-- Currency Dropdown -->
+                            <div class="custom-dropdown" id="customCountryDropdown">
+                                <div class="dropdown-trigger" id="dropdownTrigger">
+                                    <span id="selectedCountry">🇺🇸 United States (USD)</span>
+                                    <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                                        stroke="currentColor" stroke-width="2">
+                                        <path d="M6 9l6 6 6-6" />
+                                    </svg>
+                                </div>
+                                <div class="dropdown-options" id="dropdownOptions"></div>
+                            </div>
+                            <input type="hidden" id="countrySelector" value="usd">
+                            <!-- Billing Toggle -->
+                            <div
+                                class="flex items-center gap-4 bg-[#151A21] p-1.5 rounded-full border border-[#1E2530]">
+                                <span class="text-xs pl-4 font-medium text-gray-300" id="monthlyLabel">Monthly</span>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="billingToggle" onchange="updatePrices()">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="text-xs pr-4 font-medium text-gray-400 flex items-center gap-2"
+                                    id="annuallyLabel">
+                                    Yearly <span
+                                        class="bg-green-500/20 text-green-400 text-[10px] px-1.5 py-0.5 rounded font-bold">-20%</span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
+
+                        <!-- Starter (Premium Clean) -->
+                        <div class="premium-plan-card p-8 flex flex-col items-center text-center group">
+                            <h4 class="text-lg font-bold text-white mb-2 font-display">Starter</h4>
+                            <p class="text-xs text-gray-500 mb-6 uppercase tracking-wider">For Hobbyists</p>
+                            <div class="flex items-baseline gap-1 mb-8">
+                                <span
+                                    class="text-4xl font-bold text-white tracking-tight font-display group-hover:text-blue-400 transition"
+                                    id="starterPrice">$99</span>
+                                <span class="text-sm text-gray-500" id="starterPeriod">/mo</span>
+                            </div>
+                            <ul class="space-y-4 mb-8 w-full text-left">
+                                <li class="flex items-center gap-3 text-sm text-gray-400">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-blue-500/50"></div> 10,000 API calls
+                                </li>
+                                <li class="flex items-center gap-3 text-sm text-gray-400">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-blue-500/50"></div> 3 user seats
+                                </li>
+                                <li class="flex items-center gap-3 text-sm text-gray-400">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-blue-500/50"></div> Community Support
+                                </li>
+                            </ul>
+                            <button
+                                class="w-full py-3 rounded-xl border border-[#2D3748] text-sm font-semibold text-gray-300 hover:text-white hover:bg-[#1E2530] hover:border-blue-500/30 transition">Downgrade</button>
+                        </div>
+
+                        <!-- Pro Plan (EXACT ORIGINAL RESTORED) -->
+                        <div
+                            class="plan-card-pro-original featured bg-white/[0.02] rounded-xl p-8 relative flex flex-col h-full transform scale-105 shadow-2xl z-10">
+                            <div class="absolute -top-4 left-1/2 transform -translate-x-1/2">
+                                <span
+                                    class="bg-blue-600 text-white px-4 py-1 rounded-full text-xs font-bold uppercase tracking-wider shadow-lg shadow-blue-600/30">Current
+                                    Plan</span>
+                            </div>
+                            <div class="mb-8 mt-2 text-center">
+                                <h4 class="text-xl font-bold text-white mb-2 font-display">Pro</h4>
+                                <p class="text-sm text-gray-400 mb-6 uppercase tracking-wider">For Growing Teams</p>
+                                <div class="flex items-baseline justify-center gap-1">
+                                    <span class="text-5xl font-bold brand-blue font-display" id="proPrice">$249</span>
+                                    <span class="text-gray-400" id="proPeriod">/mo</span>
+                                </div>
+                            </div>
+                            <ul class="space-y-4 mb-8 flex-grow">
+                                <li class="flex items-center gap-3 text-sm text-gray-200">
+                                    <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span class="font-medium">100,000</span> API calls
+                                </li>
+                                <li class="flex items-center gap-3 text-sm text-gray-200">
+                                    <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    <span class="font-medium">10</span> user seats
+                                </li>
+                                <li class="flex items-center gap-3 text-sm text-gray-200">
+                                    <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    All 4 security layers
+                                </li>
+                                <li class="flex items-center gap-3 text-sm text-gray-200">
+                                    <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor"
+                                        viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                            d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    Priority email support
+                                </li>
+                            </ul>
+                            <button
+                                class="w-full py-3.5 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-600/20 cursor-default opacity-80"
+                                disabled>Active Plan</button>
+                        </div>
+
+                        <!-- Enterprise (Premium Clean) -->
+                        <div class="premium-plan-card p-8 flex flex-col items-center text-center group">
+                            <h4 class="text-lg font-bold text-white mb-2 font-display">Enterprise</h4>
+                            <p class="text-xs text-gray-500 mb-6 uppercase tracking-wider">For Scale</p>
+                            <div class="flex items-baseline gap-1 mb-8">
+                                <span
+                                    class="text-4xl font-bold text-white tracking-tight font-display group-hover:text-blue-400 transition"
+                                    id="enterprisePrice">$499</span>
+                                <span class="text-sm text-gray-500" id="enterprisePeriod">/mo</span>
+                            </div>
+                            <ul class="space-y-4 mb-8 w-full text-left">
+                                <li class="flex items-center gap-3 text-sm text-gray-400">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-blue-500/50"></div> Unlimited API calls
+                                </li>
+                                <li class="flex items-center gap-3 text-sm text-gray-400">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-blue-500/50"></div> Unlimited seats
+                                </li>
+                                <li class="flex items-center gap-3 text-sm text-gray-400">
+                                    <div class="w-1.5 h-1.5 rounded-full bg-blue-500/50"></div> Custom Compliance
+                                </li>
+                            </ul>
+                            <button
+                                class="w-full py-3 rounded-xl bg-[#1E2530] hover:bg-blue-600 hover:text-white hover:border-blue-500 border border-[#2D3748] text-sm font-semibold text-gray-300 transition shadow-lg shadow-black/20">Contact
+                                Sales</button>
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <script src="auth.js"></script>
+    <script src="subscription.js"></script>
+    <script>
+        loadUser();
+
+        // 3D HOVER LOGIC RESTORED
+        const usageCards = document.querySelectorAll('.usage-card-3d');
+        usageCards.forEach(card => {
+            card.addEventListener('mousemove', handleMouseMove);
+            card.addEventListener('mouseleave', handleMouseLeave);
+        });
+
+        function handleMouseMove(e) {
+            const card = e.currentTarget;
+            const rect = card.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+            const rotateY = ((x - centerX) / centerX) * 10;
+            const rotateX = ((y - centerY) / centerY) * -10;
+            card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.05, 1.05, 1.05)`;
+        }
+
+        function handleMouseLeave(e) {
+            e.currentTarget.style.transform = 'perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)';
+        }
+
+        // Pricing Logic with Currency Conversion
+        const basePricing = { monthly: { starter: 99, pro: 249, enterprise: 499 }, annually: { starter: 89, pro: 225, enterprise: 449 } };
+        let exchangeRates = { usd: 1, inr: 84.5, gbp: 0.79, eur: 0.92, jpy: 150, cad: 1.36, aud: 1.54 };
+        const countrySelector = document.getElementById('countrySelector');
+        const countryToCurrency = [
+            { name: "United States", code: "usd", flag: "🇺🇸" }, { name: "India", code: "inr", flag: "🇮🇳" },
+            { name: "United Kingdom", code: "gbp", flag: "🇬🇧" }, { name: "Eurozone", code: "eur", flag: "🇪🇺" },
+            { name: "Japan", code: "jpy", flag: "🇯🇵" }, { name: "Canada", code: "cad", flag: "🇨🇦" },
+            { name: "Australia", code: "aud", flag: "🇦🇺" }, { name: "Brazil", code: "brl", flag: "🇧🇷" },
+            { name: "South Korea", code: "krw", flag: "🇰🇷" }, { name: "Mexico", code: "mxn", flag: "🇲🇽" },
+            { name: "Switzerland", code: "chf", flag: "🇨🇭" }, { name: "Singapore", code: "sgd", flag: "🇸🇬" },
+            { name: "UAE", code: "aed", flag: "🇦🇪" }, { name: "Saudi Arabia", code: "sar", flag: "🇸🇦" },
+        ];
+        function getCurrencySymbol(code) { const m = { usd: '$', inr: '₹', gbp: '£', eur: '€', jpy: '¥', cad: 'C$', aud: 'A$', brl: 'R$', krw: '₩', mxn: 'MX$', chf: 'CHF', sgd: 'S$', aed: 'د.إ', sar: '﷼' }; return m[code] || code.toUpperCase() + ' '; }
+        function smartRound(price, code) { if (['jpy', 'krw'].includes(code)) return Math.round(price / 100) * 100; if (['inr', 'rub', 'pkr'].includes(code)) return Math.round(price / 10) * 10; if (price > 100) return Math.round(price); return Math.round(price * 100) / 100; }
+        function populateDropdown() {
+            const opts = document.getElementById('dropdownOptions'), sel = document.getElementById('selectedCountry');
+            opts.innerHTML = ''; countryToCurrency.sort((a, b) => a.name.localeCompare(b.name));
+            const priority = ['usd', 'inr', 'gbp', 'eur'], pl = countryToCurrency.filter(c => priority.includes(c.code)), ol = countryToCurrency.filter(c => !priority.includes(c.code));
+            [...pl, ...ol].forEach(c => {
+                const div = document.createElement('div'); div.className = 'dropdown-option'; if (c.code === 'usd') div.classList.add('selected');
+                div.dataset.value = c.code; div.innerHTML = `<span>${c.flag}</span> ${c.name} <span style="opacity:0.5;font-size:0.8em;margin-left:auto">${c.code.toUpperCase()}</span>`;
+                div.addEventListener('click', e => { e.stopPropagation(); countrySelector.value = c.code; sel.textContent = `${c.flag} ${c.name} (${c.code.toUpperCase()})`; document.querySelectorAll('.dropdown-option').forEach(el => el.classList.remove('selected')); div.classList.add('selected'); document.getElementById('customCountryDropdown').classList.remove('open'); updatePrices(); });
+                opts.appendChild(div);
+            });
+        }
+        populateDropdown();
+        const dd = document.getElementById('customCountryDropdown'), dt = document.getElementById('dropdownTrigger');
+        if (dd && dt) { dt.addEventListener('click', e => { e.stopPropagation(); dd.classList.toggle('open'); }); document.addEventListener('click', () => dd.classList.remove('open')); }
+        async function fetchRates() { try { const d = await (await fetch('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json')).json(); if (d && d.usd) { exchangeRates = { ...exchangeRates, ...d.usd }; console.log('Rates updated'); updatePrices(); } } catch (e) { console.warn('API failed', e); } }
+        fetchRates();
+        // Animated Counter Function
+        function animatePrice(element, targetValue, symbol, duration = 400) {
+            const startValue = parseFloat(element.textContent.replace(/[^0-9.-]/g, '')) || 0;
+            const startTime = performance.now();
+            const update = (currentTime) => {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                // Easing function for smooth animation
+                const easeOut = 1 - Math.pow(1 - progress, 3);
+                const currentValue = Math.round(startValue + (targetValue - startValue) * easeOut);
+                element.textContent = symbol + currentValue.toLocaleString();
+                if (progress < 1) requestAnimationFrame(update);
+            };
+            requestAnimationFrame(update);
+        }
+
+        function updatePrices() {
+            const isAnnual = document.getElementById('billingToggle').checked;
+            const monthLabel = document.getElementById('monthlyLabel'), annualLabel = document.getElementById('annuallyLabel');
+            if (isAnnual) { monthLabel.classList.replace('text-gray-300', 'text-gray-500'); annualLabel.classList.replace('text-gray-400', 'text-white'); }
+            else { annualLabel.classList.replace('text-white', 'text-gray-400'); monthLabel.classList.replace('text-gray-500', 'text-gray-300'); }
+            const key = isAnnual ? 'annually' : 'monthly', suffix = '/mo';
+            const curr = countrySelector.value || 'usd', rate = exchangeRates[curr] || 1, sym = getCurrencySymbol(curr);
+
+            animatePrice(document.getElementById('starterPrice'), smartRound(basePricing[key].starter * rate, curr), sym);
+            document.getElementById('starterPeriod').textContent = suffix;
+            animatePrice(document.getElementById('proPrice'), smartRound(basePricing[key].pro * rate, curr), sym);
+            document.getElementById('proPeriod').textContent = suffix;
+            animatePrice(document.getElementById('enterprisePrice'), smartRound(basePricing[key].enterprise * rate, curr), sym);
+            document.getElementById('enterprisePeriod').textContent = suffix;
+        }
+    </script>
+</body>
+
+</html>

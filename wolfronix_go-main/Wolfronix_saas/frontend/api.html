@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Documentation - Wolfronix Security</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Dependencies -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Tailwind Config -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['Fira Code', 'monospace'],
+                    },
+                    colors: {
+                        dark: {
+                            900: '#0B0F15', // Main bg
+                            800: '#151A21', // Sidebar/Card bg
+                            700: '#1E2530', // Border/Hover
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        body {
+            background-color: #0B0F15;
+            color: #E2E8F0;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0B0F15; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2D3748; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4A5568; 
+        }
+
+        /* Cards */
+        .bento-card {
+            background-color: #151A21;
+            border: 1px solid #1E2530;
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.2s ease-in-out;
+        }
+
+        .bento-card:hover {
+            border-color: #2D3748;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Nav Links */
+        .nav-link.active {
+            background-color: rgba(59, 130, 246, 0.1);
+            color: #3B82F6;
+            border-right: 3px solid #3B82F6;
+        }
+
+        .nav-link {
+            transition: all 0.2s;
+            border-right: 3px solid transparent;
+        }
+
+        .nav-link:hover:not(.active) {
+            background-color: rgba(255,255,255, 0.03);
+            color: #F8FAFC;
+        }
+
+        /* Method Badges */
+        .method-badge {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+        }
+        .method-post { background: rgba(16, 185, 129, 0.1); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.2); }
+        .method-get { background: rgba(59, 130, 246, 0.1); color: #60A5FA; border: 1px solid rgba(59, 130, 246, 0.2); }
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden font-sans antialiased text-gray-300">
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-[#151A21] border-r border-[#1E2530] flex flex-col z-20 flex-shrink-0">
+        <!-- Logo -->
+        <div class="h-16 flex items-center px-6 border-b border-[#1E2530]">
+            <div class="w-8 h-8 rounded bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mr-3 shadow-lg shadow-blue-500/20">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            </div>
+            <span class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">Wolfronix</span>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="flex-1 py-6 space-y-1">
+            <a href="dashboard.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+                Overview
+            </a>
+            <a href="api.html" class="nav-link active flex items-center px-6 py-3 text-sm font-medium">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                API Access
+            </a>
+            <a href="subscription.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+                Subscription
+            </a>
+            <a href="docs.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+                Documentation
+            </a>
+             <a href="settings.html" class="nav-link flex items-center px-6 py-3 text-sm font-medium text-gray-400">
+                <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Settings
+            </a>
+        </nav>
+
+        <!-- User Profile -->
+        <div class="p-4 border-t border-[#1E2530]">
+             <div class="flex items-center">
+                <div id="userInitials" class="w-9 h-9 rounded-full bg-gray-700 flex items-center justify-center text-sm font-bold text-white">...</div>
+                <div class="ml-3 truncate">
+                    <p id="dashboardUserName" class="text-sm font-medium text-white">...</p>
+                    <p id="dashboardUserEmail" class="text-xs text-gray-500 truncate">...</p>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0B0F15]">
+        <!-- Header -->
+        <header class="h-16 flex items-center justify-between px-8 border-b border-[#1E2530] bg-[#151A21]/50 backdrop-blur-sm sticky top-0 z-30">
+            <div>
+                <h1 class="text-xl font-semibold text-white">API Documentation</h1>
+                <p class="text-xs text-blue-400 font-mono mt-0.5">v1.2.0 &bull; 4-Layer Security</p>
+            </div>
+            
+            <div class="flex items-center space-x-4">
+                 <button class="text-gray-400 hover:text-white transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                </button>
+                <div class="h-6 w-px bg-[#1E2530]"></div>
+                <button onclick="logout()" class="px-3 py-1.5 text-xs font-medium text-gray-300 hover:text-white bg-[#1E2530] hover:bg-[#2D3748] rounded border border-[#2D3748] transition">Log out</button>
+            </div>
+        </header>
+
+        <!-- Scrollable Content -->
+        <div class="flex-1 overflow-y-auto p-8 custom-scrollbar">
+            <div class="max-w-4xl mx-auto space-y-8">
+
+                <!-- Your API Key -->
+                <div class="bento-card" id="apiKeyCard">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-lg font-semibold text-white">Your Wolfronix API Key</h2>
+                        <span id="keyStatus" class="text-xs px-2 py-1 rounded-full bg-yellow-500/10 text-yellow-400">Loading...</span>
+                    </div>
+                    
+                    <!-- Key Display -->
+                    <div class="bg-[#0B0F15] rounded-lg p-4 border border-[#1E2530] font-mono text-sm mb-4">
+                        <div class="flex items-center justify-between gap-4">
+                            <code id="apiKeyDisplay" class="text-blue-400 flex-1 truncate">Loading...</code>
+                            <div class="flex items-center gap-2 flex-shrink-0">
+                                <button id="toggleKeyBtn" onclick="toggleKeyVisibility()" class="p-2 text-gray-500 hover:text-white transition rounded hover:bg-white/5" title="Show/Hide">
+                                    <svg id="eyeIcon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                </button>
+                                <button onclick="copyApiKey()" class="p-2 text-gray-500 hover:text-white transition rounded hover:bg-white/5" title="Copy">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Key Actions -->
+                    <div class="flex items-center justify-between">
+                        <p class="text-xs text-gray-500">Include in header: <code class="text-blue-400">X-Wolfronix-Key: &lt;your_key&gt;</code></p>
+                        <button id="generateKeyBtn" onclick="generateOrRegenerateKey()" class="px-4 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                            <span id="generateKeyBtnText">Generate Key</span>
+                        </button>
+                    </div>
+
+                    <!-- Warning -->
+                    <div class="mt-4 p-3 bg-yellow-500/5 border border-yellow-500/20 rounded-lg">
+                        <p class="text-xs text-yellow-400 flex items-center gap-2">
+                            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                            <span>Keep this key secret. Anyone with this key can use your encryption quota.</span>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Authentication Header Info -->
+                <div class="bento-card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-lg font-semibold text-white">Request Headers</h2>
+                        <span class="text-xs text-gray-500 font-mono">Required</span>
+                    </div>
+                    <p class="text-sm text-gray-400 mb-4">All API requests must include your Wolfronix API key in the header.</p>
+                    <div class="bg-[#0B0F15] rounded-lg p-4 border border-[#1E2530] font-mono text-xs">
+                        <div class="flex items-center justify-between">
+                            <code class="text-blue-400">X-Wolfronix-Key: <span class="text-gray-500">&lt;YOUR_API_KEY&gt;</span></code>
+                            <button onclick="copyToClipboard('X-Wolfronix-Key: YOUR_API_KEY')" class="text-gray-500 hover:text-white transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Layer 1 -->
+                <div class="bento-card">
+                    <div class="flex items-center gap-3 mb-6">
+                         <div class="w-1.5 h-6 bg-blue-500 rounded-full"></div>
+                         <div>
+                             <h3 class="text-base font-semibold text-white">Layer 1: Static Data Masking</h3>
+                             <p class="text-xs text-gray-400">GDPR-compliant synthetic data generation.</p>
+                         </div>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <!-- Endpoint -->
+                        <div class="bg-[#0B0F15]/50 border border-[#1E2530] rounded-lg p-4 hover:border-[#2D3748] transition">
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-3">
+                                    <span class="method-badge method-post">POST</span>
+                                    <code class="text-sm text-gray-300">/masking/static/mask</code>
+                                </div>
+                                <span class="text-[10px] text-gray-500 uppercase tracking-wider">Active</span>
+                            </div>
+                            <p class="text-sm text-gray-400">Mask sensitive fields in a JSON object.</p>
+                        </div>
+
+                         <!-- Endpoint -->
+                         <div class="bg-[#0B0F15]/50 border border-[#1E2530] rounded-lg p-4 hover:border-[#2D3748] transition">
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-3">
+                                    <span class="method-badge method-post">POST</span>
+                                    <code class="text-sm text-gray-300">/masking/static/unmask</code>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-400">Retrieve original data from masked token (Requires Admin priv).</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Layer 2 -->
+                <div class="bento-card">
+                    <div class="flex items-center gap-3 mb-6">
+                         <div class="w-1.5 h-6 bg-slate-500 rounded-full"></div>
+                         <div>
+                             <h3 class="text-base font-semibold text-white">Layer 2: Dynamic Data Masking</h3>
+                             <p class="text-xs text-gray-400">Role-based real-time redaction.</p>
+                         </div>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <!-- Endpoint -->
+                        <div class="bg-[#0B0F15]/50 border border-[#1E2530] rounded-lg p-4 hover:border-[#2D3748] transition">
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-3">
+                                    <span class="method-badge method-post">POST</span>
+                                    <code class="text-sm text-gray-300">/masking/dynamic/apply</code>
+                                </div>
+                            </div>
+                             <p class="text-sm text-gray-400">Apply masking rules based on user role context.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Layer 3 -->
+                <div class="bento-card">
+                    <div class="flex items-center gap-3 mb-6">
+                         <div class="w-1.5 h-6 bg-green-500 rounded-full"></div>
+                         <div>
+                             <h3 class="text-base font-semibold text-white">Layer 3: AES-256 Encryption</h3>
+                             <p class="text-xs text-gray-400">Standard military-grade encryption.</p>
+                         </div>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                             <!-- Endpoint -->
+                            <div class="bg-[#0B0F15]/50 border border-[#1E2530] rounded-lg p-4 hover:border-[#2D3748] transition">
+                                <div class="flex items-center gap-3 mb-2">
+                                    <span class="method-badge method-post">POST</span>
+                                    <code class="text-sm text-gray-300">/aes256/encrypt</code>
+                                </div>
+                                <p class="text-xs text-gray-500">Encrypt payload.</p>
+                            </div>
+                            
+                             <!-- Endpoint -->
+                            <div class="bg-[#0B0F15]/50 border border-[#1E2530] rounded-lg p-4 hover:border-[#2D3748] transition">
+                                <div class="flex items-center gap-3 mb-2">
+                                    <span class="method-badge method-post">POST</span>
+                                    <code class="text-sm text-gray-300">/aes256/decrypt</code>
+                                </div>
+                                <p class="text-xs text-gray-500">Decrypt payload.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Layer 4 -->
+                <div class="bento-card">
+                    <div class="flex items-center gap-3 mb-6">
+                         <div class="w-1.5 h-6 bg-yellow-500 rounded-full"></div>
+                         <div>
+                             <h3 class="text-base font-semibold text-white">Layer 4: Dual-Key Zero Trust</h3>
+                             <p class="text-xs text-gray-400">Distributed key architecture.</p>
+                         </div>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <!-- Endpoint -->
+                        <div class="bg-[#0B0F15]/50 border border-[#1E2530] rounded-lg p-4 hover:border-[#2D3748] transition">
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-3">
+                                    <span class="method-badge method-post">POST</span>
+                                    <code class="text-sm text-gray-300">/encryption/dualkey/initialize</code>
+                                </div>
+                            </div>
+                             <p class="text-sm text-gray-400">Start a split-key session (Client + Server parts).</p>
+                        </div>
+                        
+                         <!-- Endpoint -->
+                        <div class="bg-[#0B0F15]/50 border border-[#1E2530] rounded-lg p-4 hover:border-[#2D3748] transition">
+                            <div class="flex items-center justify-between mb-2">
+                                <div class="flex items-center gap-3">
+                                    <span class="method-badge method-post">POST</span>
+                                    <code class="text-sm text-gray-300">/encryption/dualkey/encrypt</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            
+            <footer class="mt-12 pt-8 border-t border-[#1E2530] text-center text-xs text-gray-500">
+                &copy; 2024 Wolfronix Security. All rights reserved.
+            </footer>
+        </div>
+    </main>
+
+    <script src="auth.js"></script>
+    <script>
+        const API_BASE = 'http://localhost:5000';
+        let currentApiKey = null;
+        let isKeyRevealed = false;
+
+        // Initialize
+        loadUser();
+        loadApiKey();
+
+        // Load API key on page load
+        async function loadApiKey() {
+            try {
+                const token = localStorage.getItem('wolfronix_token');
+                if (!token) return;
+
+                const response = await fetch(`${API_BASE}/api/wolfronix/key`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const result = await response.json();
+                
+                if (result.success && result.data.hasKey) {
+                    currentApiKey = result.data;
+                    updateKeyDisplay(result.data.maskedKey);
+                    updateKeyStatus('Active', 'green');
+                    document.getElementById('generateKeyBtnText').textContent = 'Regenerate Key';
+                } else {
+                    updateKeyDisplay('No API key generated');
+                    updateKeyStatus('Not Generated', 'yellow');
+                    document.getElementById('generateKeyBtnText').textContent = 'Generate Key';
+                }
+            } catch (error) {
+                console.error('Failed to load API key:', error);
+                updateKeyDisplay('Error loading key');
+                updateKeyStatus('Error', 'red');
+            }
+        }
+
+        // Update key display
+        function updateKeyDisplay(text) {
+            document.getElementById('apiKeyDisplay').textContent = text;
+        }
+
+        // Update key status badge
+        function updateKeyStatus(status, color) {
+            const badge = document.getElementById('keyStatus');
+            badge.textContent = status;
+            badge.className = `text-xs px-2 py-1 rounded-full`;
+            
+            if (color === 'green') {
+                badge.classList.add('bg-green-500/10', 'text-green-400');
+            } else if (color === 'yellow') {
+                badge.classList.add('bg-yellow-500/10', 'text-yellow-400');
+            } else if (color === 'red') {
+                badge.classList.add('bg-red-500/10', 'text-red-400');
+            }
+        }
+
+        // Toggle key visibility
+        async function toggleKeyVisibility() {
+            if (!currentApiKey || !currentApiKey.hasKey) return;
+
+            try {
+                if (isKeyRevealed) {
+                    // Hide key
+                    updateKeyDisplay(currentApiKey.maskedKey);
+                    isKeyRevealed = false;
+                } else {
+                    // Reveal key - fetch full key
+                    const token = localStorage.getItem('wolfronix_token');
+                    const response = await fetch(`${API_BASE}/api/wolfronix/key?reveal=true`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success && result.data.apiKey) {
+                        updateKeyDisplay(result.data.apiKey);
+                        isKeyRevealed = true;
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to toggle key visibility:', error);
+            }
+        }
+
+        // Copy API key to clipboard
+        async function copyApiKey() {
+            if (!currentApiKey || !currentApiKey.hasKey) {
+                showToast('No API key to copy', 'error');
+                return;
+            }
+
+            try {
+                // Get full key for copying
+                const token = localStorage.getItem('wolfronix_token');
+                const response = await fetch(`${API_BASE}/api/wolfronix/key?reveal=true`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                const result = await response.json();
+                if (result.success && result.data.apiKey) {
+                    await navigator.clipboard.writeText(result.data.apiKey);
+                    showToast('API key copied to clipboard!', 'success');
+                }
+            } catch (error) {
+                console.error('Failed to copy key:', error);
+                showToast('Failed to copy key', 'error');
+            }
+        }
+
+        // Generate or regenerate API key
+        async function generateOrRegenerateKey() {
+            const btn = document.getElementById('generateKeyBtn');
+            const btnText = document.getElementById('generateKeyBtnText');
+            const isRegenerate = currentApiKey && currentApiKey.hasKey;
+
+            // Confirm regeneration
+            if (isRegenerate) {
+                if (!confirm('Are you sure you want to regenerate your API key? Your existing key will be invalidated immediately.')) {
+                    return;
+                }
+            }
+
+            try {
+                btn.disabled = true;
+                btnText.textContent = 'Generating...';
+
+                const token = localStorage.getItem('wolfronix_token');
+                const response = await fetch(`${API_BASE}/api/wolfronix/key`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    currentApiKey = {
+                        hasKey: true,
+                        maskedKey: result.data.maskedKey,
+                        clientId: result.data.clientId
+                    };
+                    
+                    // Show full key temporarily
+                    updateKeyDisplay(result.data.apiKey);
+                    updateKeyStatus('Active', 'green');
+                    isKeyRevealed = true;
+                    
+                    showToast(isRegenerate ? 'API key regenerated!' : 'API key generated!', 'success');
+                    btnText.textContent = 'Regenerate Key';
+                    
+                    // Auto-hide after 10 seconds
+                    setTimeout(() => {
+                        updateKeyDisplay(result.data.maskedKey);
+                        isKeyRevealed = false;
+                    }, 10000);
+                } else {
+                    showToast(result.message || 'Failed to generate key', 'error');
+                }
+            } catch (error) {
+                console.error('Failed to generate key:', error);
+                showToast('Failed to generate key', 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // Simple toast notification
+        function showToast(message, type = 'info') {
+            // Remove existing toast
+            const existing = document.querySelector('.toast-notification');
+            if (existing) existing.remove();
+
+            const toast = document.createElement('div');
+            toast.className = 'toast-notification fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2 text-sm font-medium';
+            
+            if (type === 'success') {
+                toast.classList.add('bg-green-600', 'text-white');
+            } else if (type === 'error') {
+                toast.classList.add('bg-red-600', 'text-white');
+            } else {
+                toast.classList.add('bg-blue-600', 'text-white');
+            }
+            
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text);
+            showToast('Copied to clipboard!', 'success');
+        }
+    </script>
+</body>
+</html>
