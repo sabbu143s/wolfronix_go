@@ -1337,10 +1337,14 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization, X-Client-ID, X-Environment, X-Requested-With")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Masking-Applied")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		// Handle preflight OPTIONS requests
 		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		next.ServeHTTP(w, r)

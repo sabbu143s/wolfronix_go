@@ -12,13 +12,13 @@ import (
 	"path/filepath"
 )
 
-const baseURL = "https://localhost:5002"
+const baseURL = "https://localhost:9443"
 
 func main() {
 	// Skip TLS verification for self-signed certs
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
-	fmt.Println("=== Wolfronix v1.0 Test Suite ===\n")
+	fmt.Print("=== Wolfronix v1.0 Test Suite ===\n\n")
 
 	// Test 1: Get Public Keys
 	fmt.Println("1️⃣ Testing GET /api/v1/keys...")
