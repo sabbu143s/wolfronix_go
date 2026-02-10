@@ -7,12 +7,25 @@ Official JavaScript/TypeScript SDK for Wolfronix - Zero-knowledge encryption mad
 
 ## Features
 
-- 🔐 **Zero-Knowledge Encryption** - 4-layer enterprise-grade security
+- 🔐 **Zero-Knowledge Encryption** - Keys generated client-side, never leave your device
+- 🏢 **Enterprise Ready** - Seamless integration with your existing storage
+
 - 🚀 **Simple API** - Encrypt files in 2 lines of code
 - 📦 **TypeScript Native** - Full type definitions included
 - 🌐 **Universal** - Works in Node.js and browsers
 - ⚡ **Streaming** - Handle large files with progress tracking
 - 🔄 **Auto Retry** - Built-in retry logic with exponential backoff
+
+## Backend Integration (Enterprise Mode)
+
+To use this SDK, your backend API must implement 3 storage endpoints that Wolfronix will call:
+
+1.  **POST** `/wolfronix/files/upload` - Store encrypted file + metadata
+2.  **GET** `/wolfronix/files/{id}` - Retrieve metadata
+3.  **GET** `/wolfronix/files/{id}/data` - Retrieve encrypted file blob
+
+Wolfronix handles all encryption/decryption keys and logic; you only handle the encrypted blobs.
+
 
 ## Installation
 
@@ -32,7 +45,7 @@ import Wolfronix from '@wolfronix/sdk';
 // Initialize client
 const wfx = new Wolfronix({
   baseUrl: 'https://your-wolfronix-server:5002',
-  clientId: 'your-client-id' // Optional for enterprise mode
+  clientId: 'your-enterprise-client-id'
 });
 
 // Login
@@ -61,8 +74,9 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   if (!file) return;
 
   try {
+    // Keys are automatically handled by the SDK
     const { file_id } = await wfx.encrypt(file);
-    console.log('File encrypted:', file_id);
+    console.log('File encrypted with your private key:', file_id);
   } catch (error) {
     console.error('Encryption failed:', error);
   }

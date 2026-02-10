@@ -1,6 +1,6 @@
 {
   "name": "wolfronix-sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Official Wolfronix SDK for JavaScript/TypeScript - Zero-knowledge encryption made simple",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -61,8 +61,5 @@
     "node-fetch": {
       "optional": true
     }
-  },
-  "dependencies": {
-    "wolfronix-sdk": "^1.0.0"
   }
 }

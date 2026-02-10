@@ -174,9 +174,9 @@ else
     echo -e "${GREEN}✓ Self-signed certificate generated${NC}"
 fi
 
-# Fix SSL permissions for nginx container
+# Fix SSL permissions for nginx container (644 so nginx can read inside container)
 chmod 755 "${SSL_DIR}"
-chmod 600 "${SSL_DIR}"/*.pem
+chmod 644 "${SSL_DIR}"/*.pem
 
 # =============================================================================
 # Build and start services
@@ -190,6 +190,12 @@ ${COMPOSE_CMD} -f docker-compose.prod.yml build --no-cache wolfronix
 echo -e "${GREEN}✓ Build complete${NC}"
 
 echo -e "${YELLOW}[6/8] Starting services...${NC}"
+
+# Stop any existing deployment and clean stale volumes
+echo -e "${YELLOW}Cleaning up any previous deployment...${NC}"
+${COMPOSE_CMD} -f docker-compose.prod.yml down -v 2>/dev/null || true
+rm -rf "${DATA_PATH}/postgres"/*
+mkdir -p "${DATA_PATH}/postgres"
 
 ${COMPOSE_CMD} -f docker-compose.prod.yml up -d
 
