@@ -18,7 +18,7 @@ func main() {
 	// Skip TLS verification for self-signed certs
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
-	fmt.Print("=== Wolfronix v1.0 Test Suite ===\n\n")
+	fmt.Print("=== Wolfronix v1.0 Test Suite (Enterprise Mode) ===\n\n")
 
 	// Test 1: Get Public Keys
 	fmt.Println("1️⃣ Testing GET /api/v1/keys...")
@@ -31,7 +31,7 @@ func main() {
 
 	// Test 2: Encrypt a file
 	fmt.Println("2️⃣ Testing POST /api/v1/encrypt...")
-	fileID, err := encryptFile("sample_data.txt", pubKey, "test_client_001")
+	fileID, err := encryptFile("sample_data.txt", pubKey, "test_client_001", "test_user_001")
 	if err != nil {
 		fmt.Printf("   ❌ Failed: %v\n", err)
 		return
@@ -40,7 +40,7 @@ func main() {
 
 	// Test 3: List files
 	fmt.Println("3️⃣ Testing GET /api/v1/files...")
-	files, err := listFiles()
+	files, err := listFiles("test_client_001", "test_user_001")
 	if err != nil {
 		fmt.Printf("   ❌ Failed: %v\n", err)
 		return
@@ -73,7 +73,7 @@ func getPublicKey() (string, error) {
 	return result["public_key"], nil
 }
 
-func encryptFile(filename, pubKey, clientID string) (string, error) {
+func encryptFile(filename, pubKey, clientID, userID string) (string, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return "", err
@@ -95,6 +95,8 @@ func encryptFile(filename, pubKey, clientID string) (string, error) {
 
 	req, _ := http.NewRequest("POST", baseURL+"/api/v1/encrypt", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Client-ID", clientID)
+	req.Header.Set("X-User-ID", userID)
 	req.Header.Set("X-Environment", "dev") // Enable Layer 1 fake data
 
 	resp, err := http.DefaultClient.Do(req)
@@ -116,8 +118,11 @@ func encryptFile(filename, pubKey, clientID string) (string, error) {
 	return fmt.Sprintf("%v", result), nil
 }
 
-func listFiles() ([]interface{}, error) {
-	resp, err := http.Get(baseURL + "/api/v1/files")
+func listFiles(clientID, userID string) ([]interface{}, error) {
+	req, _ := http.NewRequest("GET", baseURL+"/api/v1/files", nil)
+	req.Header.Set("X-Client-ID", clientID)
+	req.Header.Set("X-User-ID", userID)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

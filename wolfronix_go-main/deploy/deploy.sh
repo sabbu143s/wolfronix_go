@@ -48,12 +48,18 @@ if ! command -v docker &> /dev/null; then
     systemctl start docker
 fi
 
-# Check if docker-compose is installed
-if ! command -v docker-compose &> /dev/null; then
+# Determine docker compose command (v2 plugin preferred over standalone)
+if docker compose version &> /dev/null; then
+    COMPOSE_CMD="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    COMPOSE_CMD="docker-compose"
+else
     echo -e "${YELLOW}Docker Compose not found. Installing...${NC}"
     apt-get update
-    apt-get install -y docker-compose-plugin docker-compose
+    apt-get install -y docker-compose-plugin
+    COMPOSE_CMD="docker compose"
 fi
+echo -e "${GREEN}Using: ${COMPOSE_CMD}${NC}"
 
 echo -e "${GREEN}✓ Pre-flight checks passed${NC}"
 
@@ -65,10 +71,10 @@ echo -e "${YELLOW}[2/8] Creating directories...${NC}"
 
 mkdir -p "${DATA_PATH}"
 mkdir -p "${DATA_PATH}/postgres"
-mkdir -p "${DATA_PATH}/encrypted_files"
 mkdir -p "${SCRIPT_DIR}/nginx/ssl"
 mkdir -p "${SCRIPT_DIR}/certbot/www"
 mkdir -p "${SCRIPT_DIR}/certbot/conf"
+mkdir -p "${SCRIPT_DIR}/logs"
 
 chmod -R 755 "${DATA_PATH}"
 
@@ -137,11 +143,11 @@ if [ "${DOMAIN}" != "localhost" ] && [ "${SSL_MODE}" == "letsencrypt" ]; then
         -subj "/CN=${DOMAIN}" 2>/dev/null
     
     # Start nginx temporarily
-    docker-compose -f "${SCRIPT_DIR}/docker-compose.prod.yml" up -d nginx
+    ${COMPOSE_CMD} -f "${SCRIPT_DIR}/docker-compose.prod.yml" up -d nginx
     sleep 5
     
     # Get real certificate
-    docker-compose -f "${SCRIPT_DIR}/docker-compose.prod.yml" run --rm certbot certonly \
+    ${COMPOSE_CMD} -f "${SCRIPT_DIR}/docker-compose.prod.yml" run --rm certbot certonly \
         --webroot -w /var/www/certbot \
         --email "${SSL_EMAIL}" \
         --agree-tos --no-eff-email \
@@ -151,7 +157,7 @@ if [ "${DOMAIN}" != "localhost" ] && [ "${SSL_MODE}" == "letsencrypt" ]; then
     cp "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "${SSL_DIR}/"
     cp "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" "${SSL_DIR}/"
     
-    docker-compose -f "${SCRIPT_DIR}/docker-compose.prod.yml" down
+    ${COMPOSE_CMD} -f "${SCRIPT_DIR}/docker-compose.prod.yml" down
     
     echo -e "${GREEN}✓ Let's Encrypt certificate obtained${NC}"
 else
@@ -170,9 +176,6 @@ fi
 
 # Fix SSL permissions for nginx container
 chmod 755 "${SSL_DIR}"
-chmod 644 "${SSL_DIR}/fullchain.pem"
-chmod 644 "${SSL_DIR}/privkey.pem"
-
 chmod 600 "${SSL_DIR}"/*.pem
 
 # =============================================================================
@@ -182,13 +185,13 @@ chmod 600 "${SSL_DIR}"/*.pem
 echo -e "${YELLOW}[5/8] Building Wolfronix...${NC}"
 
 cd "${SCRIPT_DIR}"
-docker-compose -f docker-compose.prod.yml build --no-cache wolfronix
+${COMPOSE_CMD} -f docker-compose.prod.yml build --no-cache wolfronix
 
 echo -e "${GREEN}✓ Build complete${NC}"
 
 echo -e "${YELLOW}[6/8] Starting services...${NC}"
 
-docker-compose -f docker-compose.prod.yml up -d
+${COMPOSE_CMD} -f docker-compose.prod.yml up -d
 
 echo -e "${GREEN}✓ Services started${NC}"
 
@@ -213,7 +216,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 done
 
 if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-    echo -e "${RED}Warning: Health check timed out. Check logs with: docker-compose -f docker-compose.prod.yml logs${NC}"
+    echo -e "${RED}Warning: Health check timed out. Check logs with: ${COMPOSE_CMD} -f docker-compose.prod.yml logs${NC}"
 fi
 
 # =============================================================================
@@ -254,13 +257,13 @@ echo "  Health:   https://${DOMAIN}:9443/health"
 echo "  API:      https://${DOMAIN}:9443/api/v1/"
 echo ""
 echo -e "${BLUE}Service Status:${NC}"
-docker-compose -f docker-compose.prod.yml ps
+${COMPOSE_CMD} -f docker-compose.prod.yml ps
 echo ""
 echo -e "${BLUE}Useful Commands:${NC}"
-echo "  View logs:      docker-compose -f docker-compose.prod.yml logs -f"
-echo "  Restart:        docker-compose -f docker-compose.prod.yml restart"
-echo "  Stop:           docker-compose -f docker-compose.prod.yml down"
-echo "  Update:         docker-compose -f docker-compose.prod.yml up -d --build"
+echo "  View logs:      ${COMPOSE_CMD} -f docker-compose.prod.yml logs -f"
+echo "  Restart:        ${COMPOSE_CMD} -f docker-compose.prod.yml restart"
+echo "  Stop:           ${COMPOSE_CMD} -f docker-compose.prod.yml down"
+echo "  Update:         ${COMPOSE_CMD} -f docker-compose.prod.yml up -d --build"
 echo ""
 echo -e "${YELLOW}Security Note:${NC}"
 echo "  Your secrets are stored in: ${SCRIPT_DIR}/.env"

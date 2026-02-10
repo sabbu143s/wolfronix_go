@@ -20,10 +20,8 @@ import (
 	"math/big"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"wolfronixgo/internal/clientdb"
@@ -39,15 +37,6 @@ import (
 // Chunk size for streaming (64KB - optimal for disk I/O)
 const CHUNK_SIZE = 64 * 1024
 
-// Storage directory for encrypted files (used only in self-hosted mode)
-const ENCRYPTED_FILES_DIR = "/root/data/encrypted_files"
-
-// Storage mode constants
-const (
-	StorageModeSelfHosted = "self_hosted" // Wolfronix stores data locally (demo/legacy)
-	StorageModeClientAPI  = "client_api"  // Data stored via Client's API (enterprise)
-)
-
 // --- GLOBALS ---
 var (
 	ServerPrivateKey *rsa.PrivateKey
@@ -59,23 +48,7 @@ var (
 	// Client DB components (Enterprise mode)
 	clientRegistry *clientdb.ClientRegistry
 	clientDBConn   *clientdb.ClientDBConnector
-	// Streaming tokens for large file access (token -> decryption info)
-	streamTokens     = make(map[string]*StreamToken)
-	streamTokenMutex = &sync.Mutex{}
 )
-
-// StreamToken holds temporary decryption info for streaming
-type StreamToken struct {
-	FileID    int
-	AESKey    []byte
-	IV        []byte
-	FilePath  string
-	Filename  string
-	FileSize  int64
-	ClientID  string
-	UserID    string
-	ExpiresAt time.Time
-}
 
 // --- DATABASE INIT ---
 func initDB() {
@@ -134,62 +107,10 @@ func initDB() {
 }
 
 // initCoreTables creates the core database tables for Wolfronix v1.0
+// In enterprise mode, file data is stored via Client's API.
+// Wolfronix DB only stores: client_registry, user_keys, and metrics.
 func initCoreTables() {
-	// Create encrypted files directory
-	if err := os.MkdirAll(ENCRYPTED_FILES_DIR, 0755); err != nil {
-		log.Printf("⚠️ Failed to create encrypted files directory: %v", err)
-	} else {
-		log.Printf("📁 Encrypted files directory ready: %s", ENCRYPTED_FILES_DIR)
-	}
-
-	// Secure Storage (Production) table - now with file_path for chunked streaming
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS secure_storage (
-			id SERIAL PRIMARY KEY,
-			filename VARCHAR(255) NOT NULL,
-			encrypted_data BYTEA,
-			file_path VARCHAR(512),
-			file_size BIGINT DEFAULT 0,
-			key_part_a TEXT NOT NULL,
-			key_part_b TEXT NOT NULL,
-			iv VARCHAR(64) NOT NULL,
-			enc_time_ms INT DEFAULT 0,
-			client_id VARCHAR(255),
-			user_id VARCHAR(255),
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		log.Printf("⚠️ secure_storage table: %v", err)
-	}
-
-	// Add missing columns to secure_storage (for upgrades)
-	db.Exec(`ALTER TABLE secure_storage ADD COLUMN IF NOT EXISTS client_id VARCHAR(255)`)
-	db.Exec(`ALTER TABLE secure_storage ADD COLUMN IF NOT EXISTS user_id VARCHAR(255)`)
-	db.Exec(`ALTER TABLE secure_storage ADD COLUMN IF NOT EXISTS file_path VARCHAR(512)`)
-	db.Exec(`ALTER TABLE secure_storage ADD COLUMN IF NOT EXISTS file_size BIGINT DEFAULT 0`)
-	// Remove NOT NULL constraint from encrypted_data for chunked storage
-	db.Exec(`ALTER TABLE secure_storage ALTER COLUMN encrypted_data DROP NOT NULL`)
-
-	// Dev Storage (Layer 1) table for fake data
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS dev_storage (
-			id SERIAL PRIMARY KEY,
-			prod_file_id INT,
-			filename VARCHAR(255) NOT NULL,
-			fake_data BYTEA NOT NULL,
-			client_id VARCHAR(255),
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	if err != nil {
-		log.Printf("⚠️ dev_storage table: %v", err)
-	}
-
-	// Create indexes
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_secure_storage_client ON secure_storage(client_id)`)
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_dev_storage_client ON dev_storage(client_id)`)
-
+	log.Println("🗄️ Enterprise Mode: No local storage tables needed.")
 	log.Println("🗄️ Core Database Tables Initialized!")
 }
 
@@ -213,9 +134,6 @@ func main() {
 	r.HandleFunc("/api/v1/encrypt", encryptHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/api/v1/files", listFilesHandler).Methods("GET", "OPTIONS")
 	r.HandleFunc("/api/v1/files/{id}/decrypt", decryptStoredHandler).Methods("POST", "OPTIONS")
-	// Streaming endpoints for large files
-	r.HandleFunc("/api/v1/files/{id}/stream-token", createStreamTokenHandler).Methods("POST", "OPTIONS")
-	r.HandleFunc("/api/v1/stream/{token}", streamFileHandler).Methods("GET", "OPTIONS")
 	r.HandleFunc("/admin/clients", registerClientHandler).Methods("POST", "OPTIONS")
 
 	// === ENTERPRISE CLIENT REGISTRATION ===
@@ -258,42 +176,54 @@ func main() {
 // --- HANDLERS ---
 
 func encryptHandler(w http.ResponseWriter, r *http.Request) {
-	// Start Server Timer
 	start := time.Now()
 
-	// Use small memory buffer, large files go to temp disk
-	// maxMemory = 32MB in RAM, rest goes to temp files
 	err := r.ParseMultipartForm(32 << 20)
 	if err != nil {
 		log.Printf("❌ Parse form error: %v", err)
-		http.Error(w, "File too large or parse error", 400)
+		http.Error(w, `{"error": "File too large or parse error"}`, 400)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "File error", 400)
+		http.Error(w, `{"error": "File error"}`, 400)
 		return
 	}
 	defer file.Close()
 
 	clientPubKey := r.FormValue("client_public_key")
 	if clientPubKey == "" {
-		http.Error(w, "Missing Public Key", 400)
+		http.Error(w, `{"error": "Missing client_public_key"}`, 400)
 		return
 	}
 
-	// Get client ID from header or form
+	// Get client ID - REQUIRED in enterprise mode
 	clientID := r.Header.Get("X-Client-ID")
 	if clientID == "" {
 		clientID = r.FormValue("client_id")
 	}
+	if clientID == "" {
+		http.Error(w, `{"error": "X-Client-ID header is required"}`, 400)
+		return
+	}
+
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
 		userID = r.FormValue("user_id")
 	}
 
-	// Check if this is for dev environment (Layer 1)
+	// Verify client is registered
+	if clientRegistry == nil || clientDBConn == nil {
+		http.Error(w, `{"error": "Enterprise mode not initialized"}`, 503)
+		return
+	}
+	config, err := clientRegistry.GetClientConfig(clientID)
+	if err != nil {
+		http.Error(w, `{"error": "Client not registered. Register via /api/v1/enterprise/register first"}`, 400)
+		return
+	}
+
 	isDevEnv := r.Header.Get("X-Environment") == "dev" || r.FormValue("environment") == "dev"
 
 	// === LAYER 3: GENERATE AES-256 KEY & IV ===
@@ -302,44 +232,37 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 	iv := make([]byte, 16)
 	rand.Read(iv)
 
-	// Create AES cipher
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		http.Error(w, "Encryption init failed", 500)
+		http.Error(w, `{"error": "Encryption init failed"}`, 500)
 		return
 	}
 	stream := cipher.NewCTR(block, iv)
 
-	// Generate unique filename for encrypted file
-	encryptedFileName := fmt.Sprintf("%d_%s.enc", time.Now().UnixNano(), header.Filename)
-	encryptedFilePath := filepath.Join(ENCRYPTED_FILES_DIR, encryptedFileName)
-
-	// Create encrypted file
-	encFile, err := os.Create(encryptedFilePath)
+	// Create temp file for encryption
+	tmpFile, err := os.CreateTemp("", "wolfronix-enc-*")
 	if err != nil {
-		log.Printf("❌ Failed to create encrypted file: %v", err)
-		http.Error(w, "Storage error", 500)
+		log.Printf("❌ Failed to create temp file: %v", err)
+		http.Error(w, `{"error": "Temp file creation failed"}`, 500)
 		return
 	}
-	defer encFile.Close()
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
 
 	// === CHUNKED STREAMING ENCRYPTION ===
-	// Read input in chunks, encrypt, write to output file
 	var totalSize int64 = 0
 	buffer := make([]byte, CHUNK_SIZE)
 	encBuffer := make([]byte, CHUNK_SIZE)
-	writer := bufio.NewWriter(encFile)
+	writer := bufio.NewWriter(tmpFile)
 
 	for {
 		n, err := file.Read(buffer)
 		if n > 0 {
-			// Encrypt chunk in-place
 			stream.XORKeyStream(encBuffer[:n], buffer[:n])
-			// Write encrypted chunk
 			_, writeErr := writer.Write(encBuffer[:n])
 			if writeErr != nil {
-				os.Remove(encryptedFilePath)
-				http.Error(w, "Write error", 500)
+				tmpFile.Close()
+				http.Error(w, `{"error": "Write error"}`, 500)
 				return
 			}
 			totalSize += int64(n)
@@ -348,134 +271,80 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
-			os.Remove(encryptedFilePath)
-			http.Error(w, "Read error", 500)
+			tmpFile.Close()
+			http.Error(w, `{"error": "Read error"}`, 500)
 			return
 		}
 	}
 	writer.Flush()
+	tmpFile.Close()
 
-	log.Printf("📦 Encrypted %d bytes in chunks → %s", totalSize, encryptedFilePath)
+	log.Printf("📦 Encrypted %d bytes in chunks", totalSize)
 
 	// === LAYER 4: DUAL KEY SPLIT ===
-	// Share A: Encrypted with USER's public key (only user can unlock)
 	encA := encryptRSA(key[:16], clientPubKey)
 	if encA == "" {
-		os.Remove(encryptedFilePath)
-		http.Error(w, "Invalid Client Key", 400)
+		http.Error(w, `{"error": "Invalid Client Key"}`, 400)
 		return
 	}
-	// Share B: Encrypted with SERVER's public key (only server can unlock)
 	encB := encryptRSA(key[16:], publicKeyToPEM(ServerPublicKey))
 
-	// Calculate Duration
 	duration := time.Since(start).Milliseconds()
 
-	// Determine storage mode
-	storageMode := getStorageMode(clientID)
-	var prodFileID int64
-
-	if storageMode == StorageModeClientAPI && clientRegistry != nil && clientDBConn != nil {
-		// === ENTERPRISE MODE: Store via Client's API ===
-		config, err := clientRegistry.GetClientConfig(clientID)
-		if err != nil {
-			log.Printf("⚠️ Client config not found, falling back to self-hosted: %v", err)
-			storageMode = StorageModeSelfHosted
-		} else {
-			// Read encrypted file for upload
-			encryptedData, err := os.ReadFile(encryptedFilePath)
-			if err != nil {
-				log.Printf("❌ Failed to read encrypted file: %v", err)
-				http.Error(w, "Storage error", 500)
-				return
-			}
-
-			// Create file metadata
-			fileMetadata := &clientdb.StoredFile{
-				Filename:    header.Filename,
-				FileSize:    totalSize,
-				KeyPartA:    encA,
-				KeyPartB:    encB,
-				IV:          base64.StdEncoding.EncodeToString(iv),
-				EncTimeMS:   duration,
-				ClientID:    clientID,
-				UserID:      userID,
-				StorageType: "blob",
-			}
-
-			// Send to client's API
-			prodFileID, err = clientDBConn.StoreFileWithData(config, fileMetadata, encryptedData)
-			if err != nil {
-				log.Printf("❌ Failed to store in Client DB: %v", err)
-				// Don't delete local file on client API error - keep as backup
-				if metricsStore != nil && clientID != "" {
-					metricsStore.RecordError(clientID, userID, "encrypt", "Client API error: "+err.Error())
-				}
-				http.Error(w, "Client storage error", 500)
-				return
-			}
-
-			// Successfully stored in client DB - remove local copy
-			os.Remove(encryptedFilePath)
-			log.Printf("📤 Data sent to Client DB (ID: %d), local copy removed", prodFileID)
-
-			// Store fake data in client's dev DB if dev mode
-			if isDevEnv && fakeGen != nil {
-				fakeData := fakeGen.FakeFileContentWithMarker(int(totalSize), header.Filename)
-				clientDBConn.StoreFakeData(config, prodFileID, "FAKE_"+header.Filename, fakeData)
-			}
-		}
+	// Read encrypted data for upload to client API
+	encryptedData, err := os.ReadFile(tmpPath)
+	if err != nil {
+		log.Printf("❌ Failed to read temp encrypted file: %v", err)
+		http.Error(w, `{"error": "Failed to read encrypted data"}`, 500)
+		return
 	}
 
-	if storageMode == StorageModeSelfHosted {
-		// === SELF-HOSTED MODE: Store locally (demo/legacy) ===
-		// Layer 1: Static Masking for Dev Environment
-		if isDevEnv && fakeGen != nil {
-			fakeData := fakeGen.FakeFileContentWithMarker(int(totalSize), header.Filename)
-			log.Printf("🎭 Layer 1: Generated fake data for dev environment (%d bytes)", len(fakeData))
-			if db != nil {
-				db.Exec(`INSERT INTO dev_storage (prod_file_id, filename, fake_data, client_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
-					0, "FAKE_"+header.Filename, fakeData, clientID)
-			}
-		}
-
-		// Save metadata to local DB
-		if db != nil {
-			err := db.QueryRow(`INSERT INTO secure_storage (filename, file_path, file_size, key_part_a, key_part_b, iv, enc_time_ms, client_id, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-				header.Filename, encryptedFilePath, totalSize, encA, encB, base64.StdEncoding.EncodeToString(iv), duration, clientID, userID).Scan(&prodFileID)
-
-			if err != nil {
-				log.Println("❌ DB Write Error:", err)
-				os.Remove(encryptedFilePath)
-				if metricsStore != nil && clientID != "" {
-					metricsStore.RecordError(clientID, userID, "encrypt", err.Error())
-				}
-				http.Error(w, "Database Error", 500)
-				return
-			}
-
-			// Update dev_storage with prod_file_id if dev mode
-			if isDevEnv {
-				db.Exec(`UPDATE dev_storage SET prod_file_id = $1 WHERE filename = $2 AND client_id = $3`,
-					prodFileID, "FAKE_"+header.Filename, clientID)
-			}
-		}
+	// Create file metadata
+	fileMetadata := &clientdb.StoredFile{
+		Filename:    header.Filename,
+		FileSize:    totalSize,
+		KeyPartA:    encA,
+		KeyPartB:    encB,
+		IV:          base64.StdEncoding.EncodeToString(iv),
+		EncTimeMS:   duration,
+		ClientID:    clientID,
+		UserID:      userID,
+		StorageType: "blob",
 	}
 
-	// Record encryption metrics (in Wolfronix DB for all modes)
-	if metricsStore != nil && clientID != "" {
+	// Send to client's API
+	fileID, err := clientDBConn.StoreFileWithData(config, fileMetadata, encryptedData)
+	if err != nil {
+		log.Printf("❌ Failed to store in Client DB: %v", err)
+		if metricsStore != nil {
+			metricsStore.RecordError(clientID, userID, "encrypt", "Client API error: "+err.Error())
+		}
+		http.Error(w, `{"error": "Failed to store in client database"}`, 500)
+		return
+	}
+
+	log.Printf("📤 Data sent to Client DB (ID: %d)", fileID)
+
+	// Layer 1: Store fake data in client's dev DB if dev mode
+	if isDevEnv && fakeGen != nil {
+		fakeData := fakeGen.FakeFileContentWithMarker(int(totalSize), header.Filename)
+		clientDBConn.StoreFakeData(config, fileID, "FAKE_"+header.Filename, fakeData)
+		log.Printf("🎭 Layer 1: Fake data sent to Client Dev DB (%d bytes)", len(fakeData))
+	}
+
+	// Record encryption metrics
+	if metricsStore != nil {
 		metricsStore.RecordEncryption(clientID, userID, duration, 1, totalSize)
 	}
 
-	log.Printf("✅ File encrypted: %s (%d bytes) in %dms [%s mode]", header.Filename, totalSize, duration, storageMode)
+	log.Printf("✅ File encrypted: %s (%d bytes) in %dms [enterprise]", header.Filename, totalSize, duration)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "success",
-		"enc_time_ms":  duration,
-		"file_size":    totalSize,
-		"storage_mode": storageMode,
-		"file_id":      prodFileID,
+		"status":      "success",
+		"enc_time_ms": duration,
+		"file_size":   totalSize,
+		"file_id":     fileID,
 	})
 }
 
@@ -524,7 +393,6 @@ func encryptRSA(data []byte, pubPEM string) string {
 }
 
 func listFilesHandler(w http.ResponseWriter, r *http.Request) {
-	// Get client_id and user_id from headers or query params
 	clientID := r.Header.Get("X-Client-ID")
 	if clientID == "" {
 		clientID = r.URL.Query().Get("client_id")
@@ -534,84 +402,51 @@ func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 		userID = r.URL.Query().Get("user_id")
 	}
 
-	// Require user_id for file listing (user isolation)
+	if clientID == "" {
+		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
+		return
+	}
+
 	if userID == "" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode([]map[string]interface{}{})
 		return
 	}
 
-	var files []map[string]interface{}
-
-	// Check storage mode
-	storageMode := getStorageMode(clientID)
-
-	if storageMode == StorageModeClientAPI && clientRegistry != nil && clientDBConn != nil {
-		// === ENTERPRISE MODE: Fetch from Client's API ===
-		config, err := clientRegistry.GetClientConfig(clientID)
-		if err == nil {
-			clientFiles, err := clientDBConn.ListFiles(config, userID)
-			if err != nil {
-				log.Printf("⚠️ Failed to list files from Client API: %v", err)
-			} else {
-				for _, f := range clientFiles {
-					files = append(files, map[string]interface{}{
-						"id":           f.ID,
-						"name":         f.Filename,
-						"date":         f.CreatedAt,
-						"size":         fmt.Sprintf("%.2f MB", float64(f.FileSize)/1024/1024),
-						"size_bytes":   f.FileSize,
-						"enc_time":     fmt.Sprintf("%d ms", f.EncTimeMS),
-						"storage_type": "client_api",
-					})
-				}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(files)
-				return
-			}
-		}
-	}
-
-	// === SELF-HOSTED MODE: Fetch from local DB ===
-	if db == nil {
-		http.Error(w, "DB Down", 503)
+	if clientRegistry == nil || clientDBConn == nil {
+		http.Error(w, `{"error": "Enterprise mode not initialized"}`, 503)
 		return
 	}
 
-	rows, err := db.Query(`
-		SELECT id, filename, created_at, 
-			COALESCE(file_size, OCTET_LENGTH(encrypted_data), 0) as size,
-			enc_time_ms,
-			CASE WHEN file_path IS NOT NULL AND file_path != '' THEN 'chunked' ELSE 'legacy' END as storage_type
-		FROM secure_storage 
-		WHERE user_id = $1
-		ORDER BY id DESC
-	`, userID)
+	config, err := clientRegistry.GetClientConfig(clientID)
 	if err != nil {
-		json.NewEncoder(w).Encode([]string{})
+		http.Error(w, `{"error": "Client not registered"}`, 400)
 		return
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var id int
-		var size int64
-		var encTime int
-		var name, storageType string
-		var date time.Time
+	clientFiles, err := clientDBConn.ListFiles(config, userID)
+	if err != nil {
+		log.Printf("⚠️ Failed to list files from Client API: %v", err)
+		http.Error(w, `{"error": "Failed to fetch files"}`, 500)
+		return
+	}
 
-		rows.Scan(&id, &name, &date, &size, &encTime, &storageType)
-
+	var files []map[string]interface{}
+	for _, f := range clientFiles {
 		files = append(files, map[string]interface{}{
-			"id":           id,
-			"name":         name,
-			"date":         date.Format("2006-01-02 15:04"),
-			"size":         fmt.Sprintf("%.2f MB", float64(size)/1024/1024),
-			"size_bytes":   size,
-			"enc_time":     fmt.Sprintf("%d ms", encTime),
-			"storage_type": storageType,
+			"id":         f.ID,
+			"name":       f.Filename,
+			"date":       f.CreatedAt,
+			"size":       fmt.Sprintf("%.2f MB", float64(f.FileSize)/1024/1024),
+			"size_bytes": f.FileSize,
+			"enc_time":   fmt.Sprintf("%d ms", f.EncTimeMS),
 		})
 	}
+
+	if files == nil {
+		files = []map[string]interface{}{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(files)
 }
@@ -622,449 +457,113 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id, _ := strconv.Atoi(vars["id"])
 
-	// === SECURE HEADER: Get private key from header (preferred) or form ===
 	privKeyStr := r.Header.Get("X-Private-Key")
 	if privKeyStr == "" {
 		privKeyStr = r.FormValue("client_private_key")
 	}
 
-	// Get client ID from header or form
+	// Get client ID - REQUIRED in enterprise mode
 	clientID := r.Header.Get("X-Client-ID")
 	if clientID == "" {
 		clientID = r.FormValue("client_id")
 	}
+	if clientID == "" {
+		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
+		return
+	}
+
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
 		userID = r.FormValue("user_id")
 	}
 
-	// Get user role for Layer 2 RBAC masking
 	userRole := r.Header.Get("X-User-Role")
 	if userRole == "" {
 		userRole = r.FormValue("user_role")
 	}
 	if userRole == "" {
-		userRole = "guest" // Default to most restrictive
+		userRole = "guest"
 	}
 
-	var name, encA, encB, ivStr string
-	var filePath sql.NullString
-	var fileSize sql.NullInt64
-	var encData []byte
-	var fileOwner sql.NullString
-
-	// Retrieve metadata with ownership check
-	err := db.QueryRow("SELECT filename, file_path, file_size, encrypted_data, key_part_a, key_part_b, iv, user_id FROM secure_storage WHERE id=$1", id).
-		Scan(&name, &filePath, &fileSize, &encData, &encA, &encB, &ivStr, &fileOwner)
-
-	if err != nil {
-		if metricsStore != nil && clientID != "" {
-			metricsStore.RecordError(clientID, userID, "decrypt", "File not found")
-		}
-		http.Error(w, "File Not Found", 404)
+	// Verify client is registered
+	if clientRegistry == nil || clientDBConn == nil {
+		http.Error(w, `{"error": "Enterprise mode not initialized"}`, 503)
 		return
 	}
 
-	// Verify file ownership - user can only decrypt their own files
-	if fileOwner.Valid && fileOwner.String != "" && userID != "" && fileOwner.String != userID {
-		if metricsStore != nil && clientID != "" {
-			metricsStore.RecordError(clientID, userID, "decrypt", "Access denied - not file owner")
+	config, err := clientRegistry.GetClientConfig(clientID)
+	if err != nil {
+		http.Error(w, `{"error": "Client not registered"}`, 400)
+		return
+	}
+
+	// Fetch file metadata from client's API
+	fileMeta, err := clientDBConn.GetFileMetadata(config, int64(id), userID)
+	if err != nil {
+		if metricsStore != nil {
+			metricsStore.RecordError(clientID, userID, "decrypt", "File not found: "+err.Error())
 		}
-		http.Error(w, "Access Denied", 403)
+		http.Error(w, `{"error": "File not found"}`, 404)
+		return
+	}
+
+	// Fetch encrypted data from client's API
+	encData, err := clientDBConn.GetFileData(config, int64(id), userID)
+	if err != nil {
+		if metricsStore != nil {
+			metricsStore.RecordError(clientID, userID, "decrypt", "Failed to fetch data: "+err.Error())
+		}
+		http.Error(w, `{"error": "Failed to fetch encrypted data"}`, 500)
 		return
 	}
 
 	// === LAYER 4: UNLOCK DUAL KEYS ===
-	// Unlock Share A using USER's private key (sent from browser)
-	keyA := decryptRSA(encA, privKeyStr)
-	// Unlock Share B using SERVER's private key (held securely)
-	keyB := decryptRSA(encB, privateKeyToPEM(ServerPrivateKey))
+	keyA := decryptRSA(fileMeta.KeyPartA, privKeyStr)
+	keyB := decryptRSA(fileMeta.KeyPartB, privateKeyToPEM(ServerPrivateKey))
 
 	if keyA == nil || keyB == nil {
-		if metricsStore != nil && clientID != "" {
+		if metricsStore != nil {
 			metricsStore.RecordError(clientID, userID, "decrypt", "Key mismatch")
 		}
-		http.Error(w, "Decryption Failed (Key Mismatch)", 403)
+		http.Error(w, `{"error": "Decryption Failed (Key Mismatch)"}`, 403)
 		return
 	}
 
 	// === LAYER 3: AES DECRYPTION ===
 	fullKey := append(keyA, keyB...)
-	iv, _ := base64.StdEncoding.DecodeString(ivStr)
+	iv, _ := base64.StdEncoding.DecodeString(fileMeta.IV)
 	block, _ := aes.NewCipher(fullKey)
 	stream := cipher.NewCTR(block, iv)
 
+	decData := make([]byte, len(encData))
+	stream.XORKeyStream(decData, encData)
+
+	// === LAYER 2: DYNAMIC RBAC MASKING ===
+	contentType := http.DetectContentType(decData)
+	isTextFile := strings.HasPrefix(contentType, "text/") ||
+		strings.HasSuffix(strings.ToLower(fileMeta.Filename), ".txt") ||
+		strings.HasSuffix(strings.ToLower(fileMeta.Filename), ".csv") ||
+		strings.HasSuffix(strings.ToLower(fileMeta.Filename), ".json")
+
+	if isTextFile {
+		maskedContent := masking.MaskAllSensitiveInText(string(decData), masking.Role(userRole))
+		decData = []byte(maskedContent)
+		log.Printf("\xf0\x9f\x94\x92 Layer 2: Applied RBAC masking for role '%s' on file '%s'", userRole, fileMeta.Filename)
+	}
+
+	// Record decryption metrics
+	duration := time.Since(start).Milliseconds()
+	if metricsStore != nil {
+		metricsStore.RecordDecryption(clientID, userID, duration, 1, int64(len(decData)))
+	}
+
 	// Set response headers
-	w.Header().Set("Content-Disposition", "attachment; filename="+name)
+	w.Header().Set("Content-Disposition", "attachment; filename="+fileMeta.Filename)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Masking-Applied", userRole)
+	w.Write(decData)
 
-	// Check if using file-based storage (chunked) or legacy BYTEA storage
-	if filePath.Valid && filePath.String != "" {
-		// === CHUNKED STREAMING DECRYPTION ===
-		encFile, err := os.Open(filePath.String)
-		if err != nil {
-			log.Printf("❌ Failed to open encrypted file: %v", err)
-			http.Error(w, "File read error", 500)
-			return
-		}
-		defer encFile.Close()
-
-		// Stream decrypt in chunks
-		buffer := make([]byte, CHUNK_SIZE)
-		decBuffer := make([]byte, CHUNK_SIZE)
-		var totalDecrypted int64 = 0
-
-		// Check if text file for RBAC masking (for small text files only)
-		isTextFile := strings.HasPrefix(http.DetectContentType([]byte(name)), "text/") ||
-			strings.HasSuffix(strings.ToLower(name), ".txt") ||
-			strings.HasSuffix(strings.ToLower(name), ".csv") ||
-			strings.HasSuffix(strings.ToLower(name), ".json")
-
-		// For large files or non-text, stream directly
-		if !isTextFile || (fileSize.Valid && fileSize.Int64 > 10*1024*1024) {
-			// Direct streaming for binary/large files
-			for {
-				n, err := encFile.Read(buffer)
-				if n > 0 {
-					stream.XORKeyStream(decBuffer[:n], buffer[:n])
-					w.Write(decBuffer[:n])
-					totalDecrypted += int64(n)
-				}
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					log.Printf("❌ Stream read error: %v", err)
-					break
-				}
-			}
-		} else {
-			// For small text files, buffer for RBAC masking
-			var decData []byte
-			for {
-				n, err := encFile.Read(buffer)
-				if n > 0 {
-					stream.XORKeyStream(decBuffer[:n], buffer[:n])
-					decData = append(decData, decBuffer[:n]...)
-					totalDecrypted += int64(n)
-				}
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					break
-				}
-			}
-			// Apply RBAC masking
-			maskedContent := masking.MaskAllSensitiveInText(string(decData), masking.Role(userRole))
-			w.Write([]byte(maskedContent))
-			log.Printf("🔒 Layer 2: Applied RBAC masking for role '%s' on file '%s'", userRole, name)
-		}
-
-		log.Printf("✅ Decrypted %d bytes via chunked streaming: %s", totalDecrypted, name)
-
-		// Record metrics
-		duration := time.Since(start).Milliseconds()
-		if metricsStore != nil && clientID != "" {
-			metricsStore.RecordDecryption(clientID, userID, duration, 1, totalDecrypted)
-		}
-
-	} else {
-		// === LEGACY: In-memory decryption for old BYTEA-stored files ===
-		decData := make([]byte, len(encData))
-		stream.XORKeyStream(decData, encData)
-
-		// === LAYER 2: DYNAMIC RBAC MASKING ===
-		contentType := http.DetectContentType(decData)
-		if strings.HasPrefix(contentType, "text/") || strings.Contains(name, ".txt") ||
-			strings.Contains(name, ".csv") || strings.Contains(name, ".json") {
-			maskedContent := masking.MaskAllSensitiveInText(string(decData), masking.Role(userRole))
-			decData = []byte(maskedContent)
-			log.Printf("🔒 Layer 2: Applied RBAC masking for role '%s' on file '%s'", userRole, name)
-		}
-
-		// Record decryption metrics
-		duration := time.Since(start).Milliseconds()
-		if metricsStore != nil && clientID != "" {
-			metricsStore.RecordDecryption(clientID, userID, duration, 1, int64(len(decData)))
-		}
-
-		w.Write(decData)
-	}
-}
-
-// === STREAMING HANDLERS FOR LARGE FILES ===
-
-// createStreamTokenHandler - Creates a temporary token for streaming large files
-func createStreamTokenHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id, _ := strconv.Atoi(vars["id"])
-
-	privKeyStr := r.FormValue("client_private_key")
-	if privKeyStr == "" {
-		http.Error(w, "Missing private key", 400)
-		return
-	}
-
-	// Get client ID and user ID for metrics tracking
-	clientID := r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = r.FormValue("client_id")
-	}
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		userID = r.FormValue("user_id")
-	}
-
-	// Get file metadata with ownership check
-	var name, encA, encB, ivStr string
-	var filePath sql.NullString
-	var fileSize sql.NullInt64
-	var fileOwner sql.NullString
-
-	err := db.QueryRow("SELECT filename, file_path, file_size, key_part_a, key_part_b, iv, user_id FROM secure_storage WHERE id=$1", id).
-		Scan(&name, &filePath, &fileSize, &encA, &encB, &ivStr, &fileOwner)
-
-	if err != nil {
-		http.Error(w, "File not found", 404)
-		return
-	}
-
-	// Verify file ownership - user can only stream their own files
-	if fileOwner.Valid && fileOwner.String != "" && userID != "" && fileOwner.String != userID {
-		http.Error(w, "Access Denied", 403)
-		return
-	}
-
-	// Verify keys and decrypt AES key
-	keyA := decryptRSA(encA, privKeyStr)
-	keyB := decryptRSA(encB, privateKeyToPEM(ServerPrivateKey))
-
-	if keyA == nil || keyB == nil {
-		http.Error(w, "Key verification failed", 403)
-		return
-	}
-
-	fullKey := append(keyA, keyB...)
-	iv, _ := base64.StdEncoding.DecodeString(ivStr)
-
-	// Generate token
-	tokenBytes := make([]byte, 32)
-	rand.Read(tokenBytes)
-	token := hex.EncodeToString(tokenBytes)
-
-	// Store token with expiration (5 minutes)
-	streamTokenMutex.Lock()
-	streamTokens[token] = &StreamToken{
-		FileID:    id,
-		AESKey:    fullKey,
-		IV:        iv,
-		FilePath:  filePath.String,
-		Filename:  name,
-		FileSize:  fileSize.Int64,
-		ClientID:  clientID,
-		UserID:    userID,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	}
-	streamTokenMutex.Unlock()
-
-	// Clean up expired tokens periodically
-	go cleanupExpiredTokens()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"token":     token,
-		"filename":  name,
-		"file_size": fileSize.Int64,
-		"expires":   300, // seconds
-	})
-	log.Printf("🎫 Created stream token for file %d (%s)", id, name)
-}
-
-// streamFileHandler - Streams decrypted file using token (GET request, no auth needed)
-func streamFileHandler(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	vars := mux.Vars(r)
-	token := vars["token"]
-
-	// Get token info
-	streamTokenMutex.Lock()
-	tokenInfo, exists := streamTokens[token]
-	streamTokenMutex.Unlock()
-
-	if !exists || time.Now().After(tokenInfo.ExpiresAt) {
-		http.Error(w, "Invalid or expired token", 403)
-		return
-	}
-
-	// Open encrypted file
-	encFile, err := os.Open(tokenInfo.FilePath)
-	if err != nil {
-		http.Error(w, "File not found", 404)
-		return
-	}
-	defer encFile.Close()
-
-	// Get file info for Content-Length
-	fileInfo, _ := encFile.Stat()
-	fileSize := fileInfo.Size()
-
-	// Set headers for streaming
-	ext := strings.ToLower(filepath.Ext(tokenInfo.Filename))
-	contentType := getMimeTypeGo(ext)
-
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(fileSize, 10))
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Content-Disposition", "inline; filename="+tokenInfo.Filename)
-
-	var bytesStreamed int64 = 0
-
-	// Handle Range requests for video seeking
-	rangeHeader := r.Header.Get("Range")
-	if rangeHeader != "" {
-		// Parse range header: "bytes=start-end"
-		var rangeStart, rangeEnd int64
-		fmt.Sscanf(rangeHeader, "bytes=%d-%d", &rangeStart, &rangeEnd)
-		if rangeEnd == 0 || rangeEnd >= fileSize {
-			rangeEnd = fileSize - 1
-		}
-
-		// Seek to position (note: we need to decrypt from start due to CTR mode)
-		// For simplicity, we'll stream from start but seek in output
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", rangeStart, rangeEnd, fileSize))
-		w.Header().Set("Content-Length", strconv.FormatInt(rangeEnd-rangeStart+1, 10))
-		w.WriteHeader(http.StatusPartialContent)
-
-		// Stream with range support
-		bytesStreamed = streamDecryptedRange(w, encFile, tokenInfo.AESKey, tokenInfo.IV, rangeStart, rangeEnd)
-	} else {
-		// Full file streaming
-		block, _ := aes.NewCipher(tokenInfo.AESKey)
-		stream := cipher.NewCTR(block, tokenInfo.IV)
-
-		buffer := make([]byte, CHUNK_SIZE)
-		decBuffer := make([]byte, CHUNK_SIZE)
-
-		for {
-			n, err := encFile.Read(buffer)
-			if n > 0 {
-				stream.XORKeyStream(decBuffer[:n], buffer[:n])
-				w.Write(decBuffer[:n])
-				bytesStreamed += int64(n)
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
-			}
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				log.Printf("Stream error: %v", err)
-				break
-			}
-		}
-	}
-
-	// Record decryption metrics for streaming
-	duration := time.Since(start).Milliseconds()
-	if metricsStore != nil && tokenInfo.ClientID != "" {
-		metricsStore.RecordDecryption(tokenInfo.ClientID, tokenInfo.UserID, duration, 1, bytesStreamed)
-		log.Printf("📊 Recorded stream decryption metrics: %d bytes in %dms", bytesStreamed, duration)
-	}
-
-	log.Printf("📺 Streamed file: %s (%d bytes)", tokenInfo.Filename, bytesStreamed)
-}
-
-// streamDecryptedRange streams a specific byte range of the decrypted file
-// Returns the number of bytes written
-func streamDecryptedRange(w http.ResponseWriter, encFile *os.File, aesKey, iv []byte, start, end int64) int64 {
-	block, _ := aes.NewCipher(aesKey)
-	stream := cipher.NewCTR(block, iv)
-
-	buffer := make([]byte, CHUNK_SIZE)
-	decBuffer := make([]byte, CHUNK_SIZE)
-	var position int64 = 0
-	var bytesWritten int64 = 0
-
-	for {
-		n, err := encFile.Read(buffer)
-		if n > 0 {
-			stream.XORKeyStream(decBuffer[:n], buffer[:n])
-
-			// Calculate what portion of this chunk to write
-			chunkEnd := position + int64(n)
-
-			if chunkEnd > start && position <= end {
-				// Calculate slice boundaries
-				writeStart := int64(0)
-				writeEnd := int64(n)
-
-				if position < start {
-					writeStart = start - position
-				}
-				if chunkEnd > end+1 {
-					writeEnd = end + 1 - position
-				}
-
-				written, _ := w.Write(decBuffer[writeStart:writeEnd])
-				bytesWritten += int64(written)
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
-			}
-
-			position = chunkEnd
-			if position > end {
-				break
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-	}
-	return bytesWritten
-}
-
-func cleanupExpiredTokens() {
-	streamTokenMutex.Lock()
-	defer streamTokenMutex.Unlock()
-
-	now := time.Now()
-	for token, info := range streamTokens {
-		if now.After(info.ExpiresAt) {
-			delete(streamTokens, token)
-		}
-	}
-}
-
-func getMimeTypeGo(ext string) string {
-	mimeTypes := map[string]string{
-		".mp4":  "video/mp4",
-		".webm": "video/webm",
-		".mov":  "video/quicktime",
-		".avi":  "video/x-msvideo",
-		".mkv":  "video/x-matroska",
-		".mp3":  "audio/mpeg",
-		".wav":  "audio/wav",
-		".ogg":  "audio/ogg",
-		".jpg":  "image/jpeg",
-		".jpeg": "image/jpeg",
-		".png":  "image/png",
-		".gif":  "image/gif",
-		".webp": "image/webp",
-		".pdf":  "application/pdf",
-		".txt":  "text/plain",
-		".json": "application/json",
-	}
-	if mime, ok := mimeTypes[ext]; ok {
-		return mime
-	}
-	return "application/octet-stream"
+	log.Printf("\xe2\x9c\x85 Decrypted %d bytes: %s [enterprise]", len(decData), fileMeta.Filename)
 }
 
 // --- UTILS ---
@@ -1212,20 +711,6 @@ func updateEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getStorageMode determines storage mode for a client
-func getStorageMode(clientID string) string {
-	if clientRegistry == nil {
-		return StorageModeSelfHosted
-	}
-
-	client, err := clientRegistry.GetClient(clientID)
-	if err != nil || client.APIEndpoint == "" {
-		return StorageModeSelfHosted
-	}
-
-	return StorageModeClientAPI
-}
-
 func loadOrGenerateKeys() {
 	// Try loading existing key
 	privBytes, err := os.ReadFile("server.key")
@@ -1337,14 +822,10 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization, X-Client-ID, X-Environment, X-Requested-With")
+		w.Header().Set("Access-Control-Allow-Methods", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Masking-Applied")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-
-		// Handle preflight OPTIONS requests
 		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
 			return
 		}
 		next.ServeHTTP(w, r)
