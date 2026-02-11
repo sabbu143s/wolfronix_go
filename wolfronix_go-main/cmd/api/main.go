@@ -134,6 +134,7 @@ func main() {
 	r.HandleFunc("/api/v1/encrypt", encryptHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/api/v1/files", listFilesHandler).Methods("GET", "OPTIONS")
 	r.HandleFunc("/api/v1/files/{id}/decrypt", decryptStoredHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/api/v1/files/{id}", deleteStoredFileHandler).Methods("DELETE", "OPTIONS")
 	r.HandleFunc("/admin/clients", registerClientHandler).Methods("POST", "OPTIONS")
 
 	// === ENTERPRISE CLIENT REGISTRATION ===
@@ -564,6 +565,59 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(decData)
 
 	log.Printf("\xe2\x9c\x85 Decrypted %d bytes: %s [enterprise]", len(decData), fileMeta.Filename)
+}
+
+func deleteStoredFileHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, `{"error": "Invalid file ID"}`, 400)
+		return
+	}
+
+	clientID := r.Header.Get("X-Client-ID")
+	if clientID == "" {
+		clientID = r.URL.Query().Get("client_id")
+	}
+	if clientID == "" {
+		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
+		return
+	}
+
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = r.URL.Query().Get("user_id")
+	}
+
+	if clientRegistry == nil || clientDBConn == nil {
+		http.Error(w, `{"error": "Enterprise mode not initialized"}`, 503)
+		return
+	}
+
+	config, err := clientRegistry.GetClientConfig(clientID)
+	if err != nil {
+		http.Error(w, `{"error": "Client not registered"}`, 400)
+		return
+	}
+
+	err = clientDBConn.DeleteFile(config, int64(id), userID)
+	if err != nil {
+		log.Printf("⚠️ Failed to delete file %d: %v", id, err)
+		http.Error(w, `{"error": "Failed to delete file"}`, 500)
+		return
+	}
+
+	if metricsStore != nil {
+		metricsStore.RecordEncryption(clientID, userID, 0, -1, 0)
+	}
+
+	log.Printf("🗑️ File %d deleted by user %s [enterprise]", id, userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "File deleted successfully",
+	})
 }
 
 // --- UTILS ---

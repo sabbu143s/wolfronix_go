@@ -3,7 +3,7 @@
  * Zero-knowledge encryption made simple
  * 
  * @package @wolfronix/sdk
- * @version 1.1.0
+ * @version 1.2.0
  */
 
 import {
@@ -39,11 +39,10 @@ export interface AuthResponse {
 }
 
 export interface EncryptResponse {
-  success: boolean;
-  file_id: string;
-  original_name: string;
-  encrypted_size: number;
-  message: string;
+  status: string;
+  file_id: number;
+  file_size: number;
+  enc_time_ms: number;
 }
 
 export interface FileInfo {
@@ -72,10 +71,7 @@ export interface MetricsResponse {
   total_bytes_decrypted: number;
 }
 
-export interface StreamToken {
-  token: string;
-  expires_at: string;
-}
+
 
 // ============================================================================
 // Error Classes
@@ -195,6 +191,9 @@ export class Wolfronix {
 
     if (includeAuth && this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
+      if (this.userId) {
+        headers['X-User-ID'] = this.userId;
+      }
     }
 
     return headers;
@@ -505,71 +504,6 @@ export class Wolfronix {
     });
   }
 
-  /**
-   * Encrypt a file using streaming (for large files)
-   * 
-   * @example
-   * ```typescript
-   * const result = await wfx.encryptStream(largeFile, (progress) => {
-   *   console.log(`Progress: ${progress}%`);
-   * });
-   * ```
-   */
-  async encryptStream(
-    file: File | Blob,
-    onProgress?: (percent: number) => void
-  ): Promise<EncryptResponse> {
-    this.ensureAuthenticated();
-
-    // Get stream token first
-    const tokenResponse = await this.request<{ token: string }>('POST', '/api/v1/stream/token', {
-      body: {
-        user_id: this.userId,
-        client_id: this.config.clientId
-      }
-    });
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('user_id', this.userId || '');
-    formData.append('stream_token', tokenResponse.token);
-
-    // For progress tracking (browser only)
-    if (onProgress && typeof XMLHttpRequest !== 'undefined') {
-      return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            onProgress(Math.round((event.loaded / event.total) * 100));
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve(JSON.parse(xhr.responseText));
-          } else {
-            reject(new WolfronixError('Upload failed', 'UPLOAD_ERROR', xhr.status));
-          }
-        };
-
-        xhr.onerror = () => reject(new NetworkError('Upload failed'));
-
-        xhr.open('POST', `${this.config.baseUrl}/api/v1/stream/encrypt`);
-
-        const headers = this.getHeaders();
-        Object.entries(headers).forEach(([key, value]) => {
-          xhr.setRequestHeader(key, value);
-        });
-
-        xhr.send(formData);
-      });
-    }
-
-    return this.request<EncryptResponse>('POST', '/api/v1/stream/encrypt', {
-      formData // Stream endpoint might need update to accept public key too if re-implemented
-    });
-  }
 
   /**
    * Decrypt and retrieve a file
@@ -596,33 +530,7 @@ export class Wolfronix {
       throw new Error("Private key not available. Is user logged in?");
     }
 
-    // Export private key to PEM for server transient use
     const privateKeyPEM = await exportKeyToPEM(this.privateKey, 'private');
-
-    // Attach private key as header
-    // We also default to 'owner' role for personal decryption
-    const headers = this.getHeaders();
-    headers['X-Private-Key'] = privateKeyPEM;
-    headers['X-User-Role'] = 'owner';
-
-    // We need to bypass the standard request helper slightly or just override headers
-    // The request helper combines headers, so we can pass them in options if we supported it.
-    // Let's modify request() to accept custom headers or just do it here.
-    // Actually, request() doesn't expose custom headers in the options interface in the previous code.
-    // Let's check request() signature again.
-    // It takes options: { body?, formData?, includeAuth?, responseType? }
-    // It calls getHeaders().
-    // We should update getHeaders or request signature.
-    // EASIER: Just modify the `request` method to accept extra headers.
-
-    // WAIT: I can't easily modify `request` without changing everything. 
-    // BUT! I can temporarily patch `this.config`? No, that's hacky.
-
-    // Let's look at `request` again. 
-    // It builds headers inside.
-
-    // Okay, I will modify `request` signature in a separate chunk.
-    // For now, let's assume `request` supports `headers` option.
 
     return this.request<Blob>('POST', `/api/v1/files/${fileId}/decrypt`, {
       responseType: 'blob',
@@ -630,7 +538,7 @@ export class Wolfronix {
         'X-Private-Key': privateKeyPEM,
         'X-User-Role': 'owner'
       }
-    } as any); // Casting to any to bypass type check until I update interface
+    });
   }
 
   /**
@@ -654,71 +562,9 @@ export class Wolfronix {
         'X-Private-Key': privateKeyPEM,
         'X-User-Role': 'owner'
       }
-    } as any);
-  }
-
-  /**
-   * Decrypt using streaming (for large files)
-   */
-  async decryptStream(
-    fileId: string,
-    onProgress?: (percent: number) => void
-  ): Promise<Blob> {
-    this.ensureAuthenticated();
-
-    if (!fileId) {
-      throw new ValidationError('File ID is required');
-    }
-
-    if (!this.privateKey) {
-      throw new Error("Private key not available. Is user logged in?");
-    }
-    const privateKeyPEM = await exportKeyToPEM(this.privateKey, 'private');
-
-    // For progress tracking (browser only)
-    if (onProgress && typeof XMLHttpRequest !== 'undefined') {
-      return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.responseType = 'blob';
-
-        xhr.onprogress = (event) => {
-          if (event.lengthComputable) {
-            onProgress(Math.round((event.loaded / event.total) * 100));
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve(xhr.response);
-          } else {
-            reject(new WolfronixError('Download failed', 'DOWNLOAD_ERROR', xhr.status));
-          }
-        };
-
-        xhr.onerror = () => reject(new NetworkError('Download failed'));
-
-        // Changed endpoint to POST for enterprise decryption (to accept body/headers securely)
-        // Stream decrypt might need update in backend too. 
-        // For now, assuming standard decrypt endpoint handles streaming too.
-        xhr.open('POST', `${this.config.baseUrl}/api/v1/files/${fileId}/decrypt`);
-
-        const headers = { ...this.getHeaders(), 'X-Private-Key': privateKeyPEM, 'X-User-Role': 'owner' };
-        Object.entries(headers).forEach(([key, value]) => {
-          xhr.setRequestHeader(key, value);
-        });
-
-        xhr.send();
-      });
-    }
-
-    return this.request<Blob>('POST', `/api/v1/files/${fileId}/decrypt`, {
-      responseType: 'blob',
-      headers: {
-        'X-Private-Key': privateKeyPEM,
-        'X-User-Role': 'owner'
-      }
     });
   }
+
 
   /**
    * List all encrypted files for current user
@@ -731,7 +577,17 @@ export class Wolfronix {
    */
   async listFiles(): Promise<ListFilesResponse> {
     this.ensureAuthenticated();
-    return this.request<ListFilesResponse>('GET', '/api/v1/files');
+    const files = await this.request<any[]>('GET', '/api/v1/files');
+    return {
+      success: true,
+      files: (files || []).map(f => ({
+        file_id: f.id,
+        original_name: f.name,
+        encrypted_size: f.size_bytes,
+        created_at: f.date
+      })),
+      total: (files || []).length
+    };
   }
 
   /**
@@ -767,7 +623,7 @@ export class Wolfronix {
    */
   async getMetrics(): Promise<MetricsResponse> {
     this.ensureAuthenticated();
-    return this.request<MetricsResponse>('GET', '/api/v1/metrics');
+    return this.request<MetricsResponse>('GET', '/api/v1/metrics/summary');
   }
 
   /**

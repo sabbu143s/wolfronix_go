@@ -48,7 +48,10 @@ const wfx = new Wolfronix({
   clientId: 'your-enterprise-client-id'
 });
 
-// Login
+// Register (First time only) - Generates keys client-side
+await wfx.register('user@example.com', 'password123');
+
+// Login (Subsequent visits)
 await wfx.login('user@example.com', 'password123');
 
 // Encrypt a file
