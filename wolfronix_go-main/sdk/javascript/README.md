@@ -127,7 +127,48 @@ async function main() {
 }
 
 main();
+// Decrypt and save
+  const decrypted = await wfx.decryptToBuffer(file_id);
+  fs.writeFileSync('decrypted.pdf', Buffer.from(decrypted));
+}
+
+main();
 ```
+
+### 💬 E2E Encrypted Chat Integration
+
+Turn any chat app into a secure, end-to-end encrypted messenger in minutes.
+
+**Sender (Alice):**
+```typescript
+// 1. Get Bob's Public Key & Encrypt Message
+const securePacket = await wfx.encryptMessage("Secret details at 5 PM", "bob_user_id");
+
+// 2. Send 'securePacket' string via your normal chat API (Socket.io, Firebase, etc.)
+chatSocket.emit('message', {
+  to: 'bob',
+  text: securePacket // Valid JSON string
+});
+```
+
+**Recipient (Bob):**
+```typescript
+// 1. Receive message from chat server
+chatSocket.on('message', async (msg) => {
+  try {
+    // 2. Decrypt locally with Bob's Private Key
+    const plainText = await wfx.decryptMessage(msg.text);
+    console.log("Decrypted:", plainText);
+  } catch (err) {
+    console.error("Could not decrypt message");
+  }
+});
+```
+
+**Features:**
+- **Hybrid Encryption:** Uses AES-256 for messages + RSA-2048 for key exchange (Fast & Secure).
+- **Zero-Knowledge:** Your chat server only sees encrypted packets.
+- **Universal:** Works with any backend (Socket.io, Firebase, PostgreSQL, etc).
 
 ## API Reference
 
@@ -165,6 +206,14 @@ new Wolfronix(config: WolfronixConfig | string)
 | `decryptToBuffer(fileId)` | Decrypt file (returns ArrayBuffer) |
 | `listFiles()` | List user's encrypted files |
 | `deleteFile(fileId)` | Delete encrypted file |
+
+### E2E Chat Encryption
+
+| Method | Description |
+|--------|-------------|
+| `getPublicKey(userId)` | Fetch a user's RSA public key |
+| `encryptMessage(text, recipientId)` | Encrypt text for a recipient (returns packet string) |
+| `decryptMessage(packetString)` | Decrypt a received message packet |
 
 ### Utility
 

@@ -131,6 +131,7 @@ func main() {
 
 	// API Routes
 	r.HandleFunc("/api/v1/keys", getKeysHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/api/v1/keys/{userId}", getUserKeyHandler).Methods("GET", "OPTIONS")
 	r.HandleFunc("/api/v1/encrypt", encryptHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/api/v1/files", listFilesHandler).Methods("GET", "OPTIONS")
 	r.HandleFunc("/api/v1/files/{id}/decrypt", decryptStoredHandler).Methods("POST", "OPTIONS")
@@ -624,6 +625,48 @@ func deleteStoredFileHandler(w http.ResponseWriter, r *http.Request) {
 
 func getKeysHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"public_key": publicKeyToPEM(ServerPublicKey)})
+}
+
+func getUserKeyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	targetUserID := vars["userId"]
+	if targetUserID == "" {
+		http.Error(w, `{"error": "User ID is required"}`, 400)
+		return
+	}
+
+	clientID := r.Header.Get("X-Client-ID")
+	if clientID == "" {
+		clientID = r.URL.Query().Get("client_id")
+	}
+	if clientID == "" {
+		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
+		return
+	}
+
+	if clientRegistry == nil || clientDBConn == nil {
+		http.Error(w, `{"error": "Enterprise mode not initialized"}`, 503)
+		return
+	}
+
+	config, err := clientRegistry.GetClientConfig(clientID)
+	if err != nil {
+		http.Error(w, `{"error": "Client not registered"}`, 400)
+		return
+	}
+
+	publicKeyPEM, err := clientDBConn.GetUserPublicKey(config, targetUserID)
+	if err != nil {
+		log.Printf("⚠️ Failed to get public key for user %s: %v", targetUserID, err)
+		http.Error(w, `{"error": "User key not found"}`, 404)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"user_id":    targetUserID,
+		"public_key": publicKeyPEM,
+	})
 }
 
 func registerClientHandler(w http.ResponseWriter, r *http.Request) {

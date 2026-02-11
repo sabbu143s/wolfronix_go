@@ -3,7 +3,7 @@
  * Zero-knowledge encryption made simple
  * 
  * @package @wolfronix/sdk
- * @version 1.2.1
+ * @version 1.3.0
  */
 
 import {
@@ -11,7 +11,14 @@ import {
   exportKeyToPEM,
   importKeyFromPEM,
   wrapPrivateKey,
-  unwrapPrivateKey
+  unwrapPrivateKey,
+  generateSessionKey,
+  encryptData,
+  decryptData,
+  rsaEncrypt,
+  rsaDecrypt,
+  exportSessionKey,
+  importSessionKey
 } from './crypto';
 
 // ============================================================================
@@ -69,6 +76,12 @@ export interface MetricsResponse {
   total_decryptions: number;
   total_bytes_encrypted: number;
   total_bytes_decrypted: number;
+}
+
+export interface EncryptMessagePacket {
+  key: string; // Encrypted AES session key (RSA encrypted)
+  iv: string;  // AES-GCM IV
+  msg: string; // Encrypted message text (AES encrypted)
 }
 
 
@@ -613,6 +626,93 @@ export class Wolfronix {
     }
 
     return this.request<DeleteResponse>('DELETE', `/api/v1/files/${fileId}`);
+  }
+
+  // ============================================================================
+  // E2E Chat Encryption Methods
+  // ============================================================================
+
+  /**
+   * Get another user's public key (for E2E encryption)
+   * @param userId The ID of the recipient
+   */
+  async getPublicKey(userId: string): Promise<string> {
+    this.ensureAuthenticated();
+    const result = await this.request<{ user_id: string, public_key: string }>('GET', `/api/v1/keys/${userId}`);
+    return result.public_key;
+  }
+
+  /**
+   * Encrypt a short text message for a recipient (Hybrid Encryption: RSA + AES)
+   * Returns a secure JSON string (packet) to send via chat
+   * 
+   * @param text The plain text message
+   * @param recipientId The recipient's user ID
+   */
+  async encryptMessage(text: string, recipientId: string): Promise<string> {
+    this.ensureAuthenticated();
+
+    // 1. Get Recipient's Public Key
+    const recipientPubKeyPEM = await this.getPublicKey(recipientId);
+    const recipientPubKey = await importKeyFromPEM(recipientPubKeyPEM, 'public');
+
+    // 2. Generate Ephemeral Session Key (AES-256)
+    const sessionKey = await generateSessionKey();
+
+    // 3. Encrypt Message with Session Key
+    const { encrypted: encryptedMsg, iv } = await encryptData(text, sessionKey);
+
+    // 4. Encrypt Session Key with Recipient's RSA Key
+    const rawSessionKey = await exportSessionKey(sessionKey);
+    const encryptedSessionKey = await rsaEncrypt(rawSessionKey, recipientPubKey);
+
+    // 5. Pack everything
+    const packet: EncryptMessagePacket = {
+      key: encryptedSessionKey,
+      iv: iv,
+      msg: encryptedMsg
+    };
+
+    return JSON.stringify(packet);
+  }
+
+  /**
+   * Decrypt a message packet received from chat
+   * 
+   * @param packetJson The secure JSON string packet
+   */
+  async decryptMessage(packetJson: string): Promise<string> {
+    this.ensureAuthenticated();
+    if (!this.privateKey) {
+      throw new Error("Private key not available. Is user logged in?");
+    }
+
+    let packet: EncryptMessagePacket;
+    try {
+      packet = JSON.parse(packetJson);
+    } catch (e) {
+      throw new ValidationError("Invalid message packet format");
+    }
+
+    if (!packet.key || !packet.iv || !packet.msg) {
+      throw new ValidationError("Invalid message packet structure");
+    }
+
+    try {
+      // 1. Decrypt Session Key with My Private Key
+      // This will throw if it wasn't encrypted for me
+      const rawSessionKey = await rsaDecrypt(packet.key, this.privateKey);
+
+      // 2. Import Session Key
+      const sessionKey = await importSessionKey(rawSessionKey);
+
+      // 3. Decrypt Message Body
+      const plainText = await decryptData(packet.msg, packet.iv, sessionKey);
+
+      return plainText;
+    } catch (error) {
+      throw new Error("Decryption failed. You may not be the intended recipient.");
+    }
   }
 
   // ==========================================================================

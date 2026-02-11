@@ -22,6 +22,7 @@ const RSA_ALG = {
 };
 
 const WRAP_ALG = "AES-GCM";
+const SESSION_ALG = "AES-GCM";
 const PBKDF2_ITERATIONS = 100000;
 
 /**
@@ -166,6 +167,114 @@ export async function unwrapPrivateKey(encryptedKeyBase64: string, password: str
         RSA_ALG,
         true,
         ["decrypt", "unwrapKey"]
+    );
+}
+
+// === HYBRID ENCRYPTION PRIMITIVES (For E2E Chat) ===
+
+/**
+ * Generate a random 256-bit AES-GCM session key
+ */
+export async function generateSessionKey(): Promise<CryptoKey> {
+    return await getCrypto().subtle.generateKey(
+        {
+            name: SESSION_ALG,
+            length: 256,
+        },
+        true,
+        ["encrypt", "decrypt"]
+    );
+}
+
+/**
+ * Encrypt data with AES-GCM session key
+ */
+export async function encryptData(data: string, key: CryptoKey): Promise<{ encrypted: string, iv: string }> {
+    const enc = new TextEncoder();
+    const encodedData = enc.encode(data);
+    const iv = getCrypto().getRandomValues(new Uint8Array(12));
+
+    const encryptedContent = await getCrypto().subtle.encrypt(
+        {
+            name: SESSION_ALG,
+            iv: iv,
+        },
+        key,
+        encodedData
+    );
+
+    return {
+        encrypted: arrayBufferToBase64(encryptedContent),
+        iv: arrayBufferToBase64(iv.buffer)
+    };
+}
+
+/**
+ * Decrypt data with AES-GCM session key
+ */
+export async function decryptData(encryptedBase64: string, ivBase64: string, key: CryptoKey): Promise<string> {
+    const encryptedData = base64ToArrayBuffer(encryptedBase64);
+    const iv = base64ToArrayBuffer(ivBase64);
+
+    const decryptedContent = await getCrypto().subtle.decrypt(
+        {
+            name: SESSION_ALG,
+            iv: iv,
+        },
+        key,
+        encryptedData
+    );
+
+    const dec = new TextDecoder();
+    return dec.decode(decryptedContent);
+}
+
+/**
+ * Encrypt a session key with recipient's RSA Public Key
+ */
+export async function rsaEncrypt(data: ArrayBuffer, publicKey: CryptoKey): Promise<string> {
+    const encrypted = await getCrypto().subtle.encrypt(
+        {
+            name: "RSA-OAEP"
+        },
+        publicKey,
+        data
+    );
+    return arrayBufferToBase64(encrypted);
+}
+
+/**
+ * Decrypt a session key with my RSA Private Key
+ */
+export async function rsaDecrypt(encryptedBase64: string, privateKey: CryptoKey): Promise<ArrayBuffer> {
+    const data = base64ToArrayBuffer(encryptedBase64);
+    const decrypted = await getCrypto().subtle.decrypt(
+        {
+            name: "RSA-OAEP"
+        },
+        privateKey,
+        data
+    );
+    return decrypted;
+}
+
+/**
+ * Export raw session key to ArrayBuffer
+ */
+export async function exportSessionKey(key: CryptoKey): Promise<ArrayBuffer> {
+    return await getCrypto().subtle.exportKey("raw", key);
+}
+
+/**
+ * Import raw session key from ArrayBuffer
+ */
+export async function importSessionKey(raw: ArrayBuffer): Promise<CryptoKey> {
+    return await getCrypto().subtle.importKey(
+        "raw",
+        raw,
+        SESSION_ALG,
+        true,
+        ["encrypt", "decrypt"]
     );
 }
 
