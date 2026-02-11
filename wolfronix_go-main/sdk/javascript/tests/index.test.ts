@@ -5,7 +5,7 @@ import Wolfronix, {
   AuthenticationError,
   ValidationError,
   createClient
-} from './index';
+} from '../src/index';
 
 describe('Wolfronix SDK', () => {
   let client: Wolfronix;
@@ -136,7 +136,7 @@ describe('Wolfronix SDK', () => {
 describe('Integration Tests (requires running server)', () => {
   // These tests require a running Wolfronix server
   // Skip by default, run with: npm test -- --run integration
-  
+
   const TEST_SERVER = process.env.WOLFRONIX_TEST_SERVER || 'https://localhost:5002';
   const TEST_EMAIL = 'test@example.com';
   const TEST_PASSWORD = 'testpassword123';

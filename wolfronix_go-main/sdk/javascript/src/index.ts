@@ -3,7 +3,7 @@
  * Zero-knowledge encryption made simple
  * 
  * @package @wolfronix/sdk
- * @version 1.2.0
+ * @version 1.2.1
  */
 
 import {
@@ -40,7 +40,7 @@ export interface AuthResponse {
 
 export interface EncryptResponse {
   status: string;
-  file_id: number;
+  file_id: string;
   file_size: number;
   enc_time_ms: number;
 }
@@ -499,9 +499,16 @@ export class Wolfronix {
     }
     formData.append('client_public_key', this.publicKeyPEM);
 
-    return this.request<EncryptResponse>('POST', '/api/v1/encrypt', {
+    const response = await this.request<any>('POST', '/api/v1/encrypt', {
       formData
     });
+
+    return {
+      status: response.status,
+      file_id: String(response.file_id),
+      file_size: response.file_size,
+      enc_time_ms: response.enc_time_ms
+    };
   }
 
 

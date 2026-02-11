@@ -3,6 +3,16 @@
  * Uses Web Crypto API (supported in modern browsers and Node.js 16+)
  */
 
+// Universal crypto access (works in both Browser and Node.js 16+)
+const getCrypto = (): Crypto => {
+    if (typeof globalThis.crypto !== 'undefined') {
+        return globalThis.crypto;
+    }
+    throw new Error(
+        'Web Crypto API not available. Requires a modern browser or Node.js 16+.'
+    );
+};
+
 // Key constants
 const RSA_ALG = {
     name: "RSA-OAEP",
@@ -18,7 +28,7 @@ const PBKDF2_ITERATIONS = 100000;
  * Generate a new RSA Key Pair (2048-bit)
  */
 export async function generateKeyPair(): Promise<CryptoKeyPair> {
-    return await window.crypto.subtle.generateKey(
+    return await getCrypto().subtle.generateKey(
         RSA_ALG,
         true, // extractable
         ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
@@ -30,7 +40,7 @@ export async function generateKeyPair(): Promise<CryptoKeyPair> {
  */
 export async function exportKeyToPEM(key: CryptoKey, type: "public" | "private"): Promise<string> {
     const format = type === "public" ? "spki" : "pkcs8";
-    const exported = await window.crypto.subtle.exportKey(format, key);
+    const exported = await getCrypto().subtle.exportKey(format, key);
     const exportedAsBase64 = arrayBufferToBase64(exported);
     const pemHeader = type === "public" ? "-----BEGIN PUBLIC KEY-----" : "-----BEGIN PRIVATE KEY-----";
     const pemFooter = type === "public" ? "-----END PUBLIC KEY-----" : "-----END PRIVATE KEY-----";
@@ -51,7 +61,7 @@ export async function importKeyFromPEM(pem: string, type: "public" | "private"):
     const format = type === "public" ? "spki" : "pkcs8";
     const usage: KeyUsage[] = type === "public" ? ["encrypt", "wrapKey"] : ["decrypt", "unwrapKey"];
 
-    return await window.crypto.subtle.importKey(
+    return await getCrypto().subtle.importKey(
         format,
         binaryDer,
         RSA_ALG,
@@ -65,7 +75,7 @@ export async function importKeyFromPEM(pem: string, type: "public" | "private"):
  */
 async function deriveWrappingKey(password: string, saltHex: string): Promise<CryptoKey> {
     const enc = new TextEncoder();
-    const passwordKey = await window.crypto.subtle.importKey(
+    const passwordKey = await getCrypto().subtle.importKey(
         "raw",
         enc.encode(password),
         "PBKDF2",
@@ -75,7 +85,7 @@ async function deriveWrappingKey(password: string, saltHex: string): Promise<Cry
 
     const salt = hexToArrayBuffer(saltHex);
 
-    return await window.crypto.subtle.deriveKey(
+    return await getCrypto().subtle.deriveKey(
         {
             name: "PBKDF2",
             salt: salt,
@@ -93,21 +103,22 @@ async function deriveWrappingKey(password: string, saltHex: string): Promise<Cry
  * Wrap (encrypt) a private key with a password-derived key
  */
 export async function wrapPrivateKey(privateKey: CryptoKey, password: string): Promise<{ encryptedKey: string, salt: string }> {
+    const crypto = getCrypto();
+
     // Generate random salt
-    const salt = window.crypto.getRandomValues(new Uint8Array(16));
+    const salt = crypto.getRandomValues(new Uint8Array(16));
     const saltHex = arrayBufferToHex(salt.buffer);
 
     // Derive wrapping key
     const wrappingKey = await deriveWrappingKey(password, saltHex);
 
     // Export private key to PKCS8
-    const exportedKey = await window.crypto.subtle.exportKey("pkcs8", privateKey);
+    const exportedKey = await crypto.subtle.exportKey("pkcs8", privateKey);
 
     // Encrypt the exported key data
-    // Note: We use AES-GCM for wrapping manually since wrapKey API has limited support for password-based wrapping
-    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
 
-    const encryptedContent = await window.crypto.subtle.encrypt(
+    const encryptedContent = await crypto.subtle.encrypt(
         {
             name: WRAP_ALG,
             iv: iv,
@@ -140,7 +151,7 @@ export async function unwrapPrivateKey(encryptedKeyBase64: string, password: str
 
     const wrappingKey = await deriveWrappingKey(password, saltHex);
 
-    const decryptedKeyData = await window.crypto.subtle.decrypt(
+    const decryptedKeyData = await getCrypto().subtle.decrypt(
         {
             name: WRAP_ALG,
             iv: iv,
@@ -149,7 +160,7 @@ export async function unwrapPrivateKey(encryptedKeyBase64: string, password: str
         data
     );
 
-    return await window.crypto.subtle.importKey(
+    return await getCrypto().subtle.importKey(
         "pkcs8",
         decryptedKeyData,
         RSA_ALG,
@@ -158,20 +169,29 @@ export async function unwrapPrivateKey(encryptedKeyBase64: string, password: str
     );
 }
 
-// === UTILITIES ===
+// === UTILITIES (Universal: Browser + Node.js) ===
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
-    let binary = "";
     const bytes = new Uint8Array(buffer);
+    // Use Buffer in Node.js, btoa in browser
+    if (typeof Buffer !== 'undefined') {
+        return Buffer.from(bytes).toString('base64');
+    }
+    let binary = "";
     const len = bytes.byteLength;
     for (let i = 0; i < len; i++) {
         binary += String.fromCharCode(bytes[i]);
     }
-    return window.btoa(binary);
+    return btoa(binary);
 }
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binary_string = window.atob(base64);
+    // Use Buffer in Node.js, atob in browser
+    if (typeof Buffer !== 'undefined') {
+        const buf = Buffer.from(base64, 'base64');
+        return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    }
+    const binary_string = atob(base64);
     const len = binary_string.length;
     const bytes = new Uint8Array(len);
     for (let i = 0; i < len; i++) {

@@ -12,7 +12,9 @@ wolfronix_data/
 
 # 3. Go Binaries & Build Artifacts
 wolfronix-engine
+*.exe
 main
+node_modules/
 client/source.dat
 client/encrypted.bin
 client/decrypted_file

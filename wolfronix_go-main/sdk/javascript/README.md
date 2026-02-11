@@ -1,19 +1,17 @@
-# @wolfronix/sdk
+# wolfronix-sdk
 
 Official JavaScript/TypeScript SDK for Wolfronix - Zero-knowledge encryption made simple.
 
-[![npm version](https://badge.fury.io/js/@wolfronix%2Fsdk.svg)](https://www.npmjs.com/package/@wolfronix/sdk)
+[![npm version](https://badge.fury.io/js/wolfronix-sdk.svg)](https://www.npmjs.com/package/wolfronix-sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
 
 - 🔐 **Zero-Knowledge Encryption** - Keys generated client-side, never leave your device
 - 🏢 **Enterprise Ready** - Seamless integration with your existing storage
-
 - 🚀 **Simple API** - Encrypt files in 2 lines of code
 - 📦 **TypeScript Native** - Full type definitions included
-- 🌐 **Universal** - Works in Node.js and browsers
-- ⚡ **Streaming** - Handle large files with progress tracking
+- 🌐 **Universal** - Works in Node.js 16+ and modern browsers
 - 🔄 **Auto Retry** - Built-in retry logic with exponential backoff
 
 ## Backend Integration (Enterprise Mode)
@@ -30,17 +28,17 @@ Wolfronix handles all encryption/decryption keys and logic; you only handle the 
 ## Installation
 
 ```bash
-npm install @wolfronix/sdk
+npm install wolfronix-sdk
 # or
-yarn add @wolfronix/sdk
+yarn add wolfronix-sdk
 # or
-pnpm add @wolfronix/sdk
+pnpm add wolfronix-sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import Wolfronix from '@wolfronix/sdk';
+import Wolfronix from 'wolfronix-sdk';
 
 // Initialize client
 const wfx = new Wolfronix({
@@ -67,7 +65,7 @@ const decrypted = await wfx.decrypt(result.file_id);
 ### Browser (React, Vue, Angular, etc.)
 
 ```typescript
-import Wolfronix from '@wolfronix/sdk';
+import Wolfronix from 'wolfronix-sdk';
 
 const wfx = new Wolfronix('https://wolfronix-server:5002');
 
@@ -77,7 +75,6 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   if (!file) return;
 
   try {
-    // Keys are automatically handled by the SDK
     const { file_id } = await wfx.encrypt(file);
     console.log('File encrypted with your private key:', file_id);
   } catch (error) {
@@ -102,7 +99,7 @@ const handleDownload = async (fileId: string, filename: string) => {
 ### Node.js
 
 ```typescript
-import Wolfronix from '@wolfronix/sdk';
+import Wolfronix from 'wolfronix-sdk';
 import * as fs from 'fs';
 
 const wfx = new Wolfronix({
@@ -130,23 +127,6 @@ async function main() {
 }
 
 main();
-```
-
-### Large File Streaming with Progress
-
-```typescript
-const wfx = new Wolfronix('https://wolfronix-server:5002');
-
-// Encrypt with progress
-const result = await wfx.encryptStream(largeFile, (percent) => {
-  console.log(`Uploading: ${percent}%`);
-  progressBar.value = percent;
-});
-
-// Decrypt with progress
-const blob = await wfx.decryptStream(fileId, (percent) => {
-  console.log(`Downloading: ${percent}%`);
-});
 ```
 
 ## API Reference
@@ -181,10 +161,8 @@ new Wolfronix(config: WolfronixConfig | string)
 | Method | Description |
 |--------|-------------|
 | `encrypt(file, filename?)` | Encrypt and store file |
-| `encryptStream(file, onProgress?)` | Encrypt large file with progress |
 | `decrypt(fileId)` | Decrypt file (returns Blob) |
 | `decryptToBuffer(fileId)` | Decrypt file (returns ArrayBuffer) |
-| `decryptStream(fileId, onProgress?)` | Decrypt large file with progress |
 | `listFiles()` | List user's encrypted files |
 | `deleteFile(fileId)` | Delete encrypted file |
 
@@ -207,7 +185,7 @@ import Wolfronix, {
   PermissionDeniedError,
   NetworkError,
   ValidationError
-} from '@wolfronix/sdk';
+} from 'wolfronix-sdk';
 
 try {
   await wfx.encrypt(file);
@@ -246,7 +224,7 @@ import Wolfronix, {
   FileInfo,
   ListFilesResponse,
   MetricsResponse
-} from '@wolfronix/sdk';
+} from 'wolfronix-sdk';
 
 // All methods are fully typed
 const config: WolfronixConfig = {
@@ -263,7 +241,7 @@ const response: EncryptResponse = await wfx.encrypt(file);
 ```typescript
 // useWolfronix.ts
 import { useState, useCallback, useMemo } from 'react';
-import Wolfronix, { FileInfo as WolfronixFile } from '@wolfronix/sdk';
+import Wolfronix, { FileInfo as WolfronixFile } from 'wolfronix-sdk';
 
 export function useWolfronix(baseUrl: string, clientId?: string) {
   const [isLoading, setIsLoading] = useState(false);
@@ -351,10 +329,25 @@ function FileManager() {
 }
 ```
 
+## Real-World Use Cases
+
+Wolfronix can be integrated into **any application** that handles sensitive data:
+
+| Industry | Application | How Wolfronix Helps |
+|----------|------------|---------------------|
+| 🏥 **Healthcare** | Patient records, lab reports | HIPAA-compliant encryption at rest |
+| 🏦 **Finance** | Invoices, tax docs, receipts | End-to-end encrypted banking documents |
+| ⚖️ **Legal** | Contracts, case files | Zero-knowledge confidential storage |
+| ☁️ **Cloud Storage** | Drive/Dropbox alternatives | Encrypted file vault with user-owned keys |
+| 🏢 **Enterprise** | HR records, internal docs | Per-employee encryption isolation |
+| 🎓 **Education** | Exam papers, student data | Tamper-proof academic records |
+| 💬 **Messaging** | File attachments | Encrypted file sharing in chat apps |
+| 🛒 **E-commerce** | Order docs, payment receipts | PCI-compliant document storage |
+
 ## Requirements
 
 - Node.js 16+ (for Node.js usage)
-- Modern browser with Fetch API support
+- Modern browser with Web Crypto API support
 
 ## License
 
