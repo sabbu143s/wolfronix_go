@@ -140,9 +140,9 @@ sudo nano /opt/wolfronix/deploy/.env
 | `JWT_SECRET` | Yes | JWT signing key (auto-generated) |
 | `MASTER_KEY` | Yes | Master encryption key (auto-generated) |
 | `ADMIN_API_KEY` | Yes | Admin key for enterprise endpoints (auto-generated) |
-| `ALLOWED_ORIGINS` | No | CORS origins, comma-separated (default: your domain) |
-| `CLIENT_DB_API_ENDPOINT` | No | Client DB URL for enterprise mode |
-| `CLIENT_DB_API_KEY` | No | Client DB auth key |
+| `ALLOWED_ORIGINS` | No | CORS origins, comma-separated or `*` for all (default: `*`) |
+| `CLIENT_DB_API_ENDPOINT` | No | Connector URL for file/key storage (see below) |
+| `CLIENT_DB_API_KEY` | No | Connector auth key |
 | `GOMEMLIMIT` | No | Go memory limit (default: 24GiB) |
 | `SSL_MODE` | No | `letsencrypt` or `selfsigned` |
 | `DOMAIN` | No | Your domain (default: localhost) |
@@ -152,6 +152,55 @@ Generate secrets manually:
 openssl rand -hex 32  # For JWT_SECRET, MASTER_KEY, ADMIN_API_KEY
 openssl rand -hex 16  # For DB_PASSWORD
 ```
+
+---
+
+## Database Connectors (File + Key Storage)
+
+The Wolfronix Engine encrypts files and keys, but needs a database to **store** them. Pre-built connectors are provided in `connectors/`:
+
+| Connector | Database |
+|-----------|----------|
+| `connectors/supabase/` | Supabase (PostgreSQL) |
+| `connectors/mongodb/` | MongoDB / Atlas |
+| `connectors/mysql/` | MySQL / MariaDB |
+| `connectors/firebase/` | Firebase Firestore + Storage |
+| `connectors/postgresql/` | PostgreSQL (self-hosted/RDS/Neon) |
+
+### Setup a Connector
+
+```bash
+# 1. Pick a connector
+cd /opt/wolfronix/connectors/postgresql
+
+# 2. Run schema (SQL connectors only)
+psql -d wolfronix -f schema.sql
+
+# 3. Configure
+cp .env.example .env
+nano .env
+
+# 4. Start
+npm install && npm start   # Runs on port 8080
+```
+
+### Connect to Engine
+
+Add to your engine's `.env`:
+```bash
+CLIENT_DB_API_ENDPOINT=http://localhost:8080
+CLIENT_DB_API_KEY=your-connector-api-key
+CLIENT_DB_TYPE=custom_api
+```
+
+### Docker Connector
+
+Uncomment the `connector` service in `docker-compose.prod.yml`, then:
+```bash
+CLIENT_DB_API_ENDPOINT=http://wolfronix_connector:8080
+```
+
+See `connectors/README.md` for full details.
 
 ---
 

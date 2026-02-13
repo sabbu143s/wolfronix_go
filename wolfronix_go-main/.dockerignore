@@ -20,6 +20,8 @@ test/
 scripts/
 migrations/
 client/
+connectors/
+test_app/
 node_modules/
 
 # Documentation

@@ -22,3 +22,18 @@ client/decrypted.bin
 
 # 4. System
 .DS_Store
+Thumbs.db
+
+# 5. Wolfronix SaaS build artifacts
+Wolfronix_saas/.venv/
+Wolfronix_saas/backend/node_modules/
+Wolfronix_saas/frontend/node_modules/
+Wolfronix_saas/backend/*.log
+Wolfronix_saas/frontend/*.mp4
+
+# 6. IDE
+.vscode/
+.idea/
+
+# 7. Encrypted file storage (runtime data)
+wolfronix_data/encrypted_files/

@@ -3,16 +3,16 @@ services:
     image: postgres:15-alpine
     container_name: wolfronix_db
     environment:
-      - POSTGRES_USER=${DB_USER:-admin}
+      - POSTGRES_USER=${DB_USER:-wolfuser}
       - POSTGRES_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD in .env}
-      - POSTGRES_DB=${DB_NAME:-client_vault}
+      - POSTGRES_DB=${DB_NAME:-wolfronix}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
     restart: always
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d client_vault"]
+      test: ["CMD-SHELL", "pg_isready -U wolfuser -d wolfronix"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -27,9 +27,9 @@ services:
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_USER=${DB_USER:-admin}
+      - DB_USER=${DB_USER:-wolfuser}
       - DB_PASS=${DB_PASSWORD:?Set DB_PASSWORD in .env}
-      - DB_NAME=${DB_NAME:-client_vault}
+      - DB_NAME=${DB_NAME:-wolfronix}
       # Client Database API Configuration (Universal DB Connector)
       - CLIENT_DB_API_ENDPOINT=${CLIENT_DB_API_ENDPOINT:-}
       - CLIENT_DB_API_KEY=${CLIENT_DB_API_KEY:-}

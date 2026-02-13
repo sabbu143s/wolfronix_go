@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 )
 
 func main() {
@@ -39,6 +40,7 @@ func main() {
 		log.Fatal("❌ Failed to create request:", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Key", os.Getenv("ADMIN_API_KEY"))
 
 	resp, err := client.Do(req)
 	if err != nil {

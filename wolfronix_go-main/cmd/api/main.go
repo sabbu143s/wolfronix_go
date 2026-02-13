@@ -150,7 +150,6 @@ func main() {
 	r.HandleFunc("/api/v1/files/{id}/decrypt", decryptStoredHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/api/v1/files/{id}", deleteStoredFileHandler).Methods("DELETE", "OPTIONS")
 	r.HandleFunc("/api/v1/files/{id}/key", getFileKeyPartHandler).Methods("GET", "OPTIONS")
-	r.HandleFunc("/admin/clients", requireAdminKey(registerClientHandler)).Methods("POST", "OPTIONS")
 
 	// === ENTERPRISE CLIENT REGISTRATION ===
 	// Register a new client with their API endpoint (Enterprise mode) - ADMIN ONLY
@@ -1071,7 +1070,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"status":    status,
 		"service":   "wolfronix",
-		"version":   "1.0.0",
+		"version":   "2.3.0",
 		"database":  dbStatus,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}

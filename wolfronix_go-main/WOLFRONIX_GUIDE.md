@@ -76,8 +76,8 @@
 ### Authentication Endpoints
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/api/v1/register` | Register new user |
-| POST | `/api/v1/login` | User login |
+| POST | `/api/v1/keys/register` | Register new user |
+| POST | `/api/v1/keys/login` | User login |
 
 ### File Operations
 | Method | Endpoint | Purpose |
@@ -91,9 +91,7 @@
 ### Streaming (Large Files)
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| POST | `/api/v1/stream/token` | Get stream token |
-| POST | `/api/v1/stream/encrypt` | Stream encrypt |
-| GET | `/api/v1/stream/decrypt/{file_id}` | Stream decrypt |
+| GET | `/api/v1/stream` | WebSocket endpoint (upgrade to ws) — supports stream token, encrypt, and decrypt operations |
 
 ### Enterprise Management
 | Method | Endpoint | Purpose |
@@ -144,7 +142,7 @@
 
 **Request:**
 ```http
-POST /api/v1/register
+POST /api/v1/keys/register
 Content-Type: application/json
 
 {
@@ -201,7 +199,7 @@ Content-Type: application/json
 
 **Request:**
 ```http
-POST /api/v1/login
+POST /api/v1/keys/login
 Content-Type: application/json
 
 {
@@ -851,7 +849,7 @@ class WolfronixClient {
   }
 
   async register(email, password) {
-    const response = await fetch(`${this.baseUrl}/api/v1/register`, {
+    const response = await fetch(`${this.baseUrl}/api/v1/keys/register`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -865,7 +863,7 @@ class WolfronixClient {
   }
 
   async login(email, password) {
-    const response = await fetch(`${this.baseUrl}/api/v1/login`, {
+    const response = await fetch(`${this.baseUrl}/api/v1/keys/login`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -955,7 +953,7 @@ class WolfronixClient:
     
     def register(self, email, password):
         response = requests.post(
-            f'{self.base_url}/api/v1/register',
+            f'{self.base_url}/api/v1/keys/register',
             json={'email': email, 'password': password},
             headers=self._headers(include_auth=False),
             verify=False  # For self-signed certs
@@ -966,7 +964,7 @@ class WolfronixClient:
     
     def login(self, email, password):
         response = requests.post(
-            f'{self.base_url}/api/v1/login',
+            f'{self.base_url}/api/v1/keys/login',
             json={'email': email, 'password': password},
             headers=self._headers(include_auth=False),
             verify=False
@@ -1053,7 +1051,7 @@ public class WolfronixClient {
         HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
 
         ResponseEntity<Map> response = restTemplate.postForEntity(
-            baseUrl + "/api/v1/login", request, Map.class
+            baseUrl + "/api/v1/keys/login", request, Map.class
         );
         
         this.token = (String) response.getBody().get("token");
@@ -1121,7 +1119,7 @@ class WolfronixClient {
     public function login($email, $password) {
         $response = Http::withHeaders([
             'X-Client-ID' => $this->clientId
-        ])->withoutVerifying()->post("{$this->baseUrl}/api/v1/login", [
+        ])->withoutVerifying()->post("{$this->baseUrl}/api/v1/keys/login", [
             'email' => $email,
             'password' => $password
         ]);
@@ -1207,7 +1205,7 @@ public class WolfronixClient
             "application/json"
         );
 
-        var response = await _client.PostAsync($"{_baseUrl}/api/v1/login", content);
+        var response = await _client.PostAsync($"{_baseUrl}/api/v1/keys/login", content);
         var json = await response.Content.ReadAsStringAsync();
         var data = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
         
@@ -1250,13 +1248,13 @@ Console.WriteLine($"Encrypted file ID: {result["file_id"]}");
 
 ```bash
 # Register
-curl -k -X POST https://localhost:5002/api/v1/register \
+curl -k -X POST https://localhost:5002/api/v1/keys/register \
   -H "Content-Type: application/json" \
   -H "X-Client-ID: your-client-id" \
   -d '{"email":"user@example.com","password":"password123"}'
 
 # Login
-curl -k -X POST https://localhost:5002/api/v1/login \
+curl -k -X POST https://localhost:5002/api/v1/keys/login \
   -H "Content-Type: application/json" \
   -H "X-Client-ID: your-client-id" \
   -d '{"email":"user@example.com","password":"password123"}'

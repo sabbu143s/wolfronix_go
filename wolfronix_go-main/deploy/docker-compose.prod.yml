@@ -109,6 +109,26 @@ services:
     networks:
       - wolfronix_network
 
+  # ─── Database Connector (optional — pick one, uncomment & configure) ───────
+  # Pre-built connectors: ../connectors/{supabase,mongodb,mysql,firebase,postgresql}
+  #
+  # To use: uncomment the block below, set CONNECTOR_TYPE to your choice,
+  # create a .env in the connector folder, and set CLIENT_DB_API_ENDPOINT
+  # in the engine's .env to http://wolfronix_connector:8080
+  #
+  # connector:
+  #   build:
+  #     context: ../connectors/${CONNECTOR_TYPE:-postgresql}
+  #     dockerfile: Dockerfile
+  #   container_name: wolfronix_connector
+  #   env_file:
+  #     - ../connectors/${CONNECTOR_TYPE:-postgresql}/.env
+  #   ports:
+  #     - "8080:8080"
+  #   restart: always
+  #   networks:
+  #     - wolfronix_network
+
 volumes:
   wolfronix_data:
     driver: local

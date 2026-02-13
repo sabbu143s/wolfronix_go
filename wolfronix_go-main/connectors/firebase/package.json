@@ -1,0 +1,17 @@
+{
+  "name": "wolfronix-firebase-connector",
+  "version": "1.0.0",
+  "description": "Wolfronix DB Connector for Firebase Firestore",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "firebase-admin": "^12.7.0",
+    "multer": "^1.4.5-lts.1",
+    "dotenv": "^16.4.5",
+    "cors": "^2.8.5"
+  }
+}

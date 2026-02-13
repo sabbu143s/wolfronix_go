@@ -124,11 +124,11 @@ WOLFRONIX_ENV=production
 GOMEMLIMIT=24GiB
 
 # CORS (comma-separated origins, or * for all)
-ALLOWED_ORIGINS=https://${DOMAIN}
+ALLOWED_ORIGINS=*
 
-# Enterprise Client DB (configure if using enterprise mode)
-# CLIENT_DB_API_ENDPOINT=http://your-client-api:8080/api
-# CLIENT_DB_API_KEY=your-client-api-key
+# Client DB Connector (see connectors/ folder for pre-built options)
+# CLIENT_DB_API_ENDPOINT=http://wolfronix_connector:8080
+# CLIENT_DB_API_KEY=your-connector-api-key
 # CLIENT_DB_TYPE=custom_api
 # CLIENT_DB_TIMEOUT=30s
 # CLIENT_DB_RETRY_COUNT=3
