@@ -1089,14 +1089,19 @@ func corsMiddleware(next http.Handler) http.Handler {
 	allowedOrigins := getAllowedOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		allowed := false
-		for _, o := range allowedOrigins {
-			if strings.TrimSpace(o) == origin {
-				allowed = true
-				break
+
+		// Wildcard: allow all origins
+		allowAll := len(allowedOrigins) == 1 && allowedOrigins[0] == "*"
+		allowed := allowAll
+		if !allowAll {
+			for _, o := range allowedOrigins {
+				if strings.TrimSpace(o) == origin {
+					allowed = true
+					break
+				}
 			}
 		}
-		if allowed {
+		if allowed && origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")

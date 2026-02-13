@@ -95,10 +95,14 @@ if [ ! -f "${SCRIPT_DIR}/.env" ]; then
     ADMIN_API_KEY=$(openssl rand -hex 32)
     
     # Default to letsencrypt if a real domain is provided, otherwise selfsigned
-    if [ "${DOMAIN}" != "localhost" ]; then
+    # Let's Encrypt does NOT work with IP addresses — only domain names
+    if [ "${DOMAIN}" != "localhost" ] && ! echo "${DOMAIN}" | grep -qP '^\d+\.\d+\.\d+\.\d+$'; then
         DEFAULT_SSL_MODE="letsencrypt"
     else
         DEFAULT_SSL_MODE="selfsigned"
+        if echo "${DOMAIN}" | grep -qP '^\d+\.\d+\.\d+\.\d+$'; then
+            echo -e "${YELLOW}  Note: IP address detected — using self-signed SSL (Let's Encrypt requires a domain name)${NC}"
+        fi
     fi
 
     cat > "${SCRIPT_DIR}/.env" << EOF
