@@ -11,7 +11,7 @@ Official JavaScript/TypeScript SDK for Wolfronix - Zero-knowledge encryption mad
 - 🏢 **Enterprise Ready** - Seamless integration with your existing storage
 - 🚀 **Simple API** - Encrypt files in 2 lines of code
 - 📦 **TypeScript Native** - Full type definitions included
-- 🌐 **Universal** - Works in Node.js 16+ and modern browsers
+- 🌐 **Universal** - Works in Node.js 18+ and modern browsers
 - 🔄 **Auto Retry** - Built-in retry logic with exponential backoff
 
 ## Backend Integration (Enterprise Mode)
@@ -43,7 +43,8 @@ import Wolfronix from 'wolfronix-sdk';
 // Initialize client
 const wfx = new Wolfronix({
   baseUrl: 'https://your-wolfronix-server:5002',
-  clientId: 'your-enterprise-client-id'
+  clientId: 'your-enterprise-client-id',
+  wolfronixKey: 'your-api-key'
 });
 
 // Register (First time only) - Generates keys client-side
@@ -105,6 +106,7 @@ import * as fs from 'fs';
 const wfx = new Wolfronix({
   baseUrl: 'https://wolfronix-server:5002',
   clientId: 'your-client-id',
+  wolfronixKey: 'your-api-key',
   insecure: true // For self-signed certs in development
 });
 
@@ -122,12 +124,6 @@ async function main() {
   console.log('Your files:', files);
 
   // Decrypt and save
-  const decrypted = await wfx.decryptToBuffer(file_id);
-  fs.writeFileSync('decrypted.pdf', Buffer.from(decrypted));
-}
-
-main();
-// Decrypt and save
   const decrypted = await wfx.decryptToBuffer(file_id);
   fs.writeFileSync('decrypted.pdf', Buffer.from(decrypted));
 }
@@ -182,9 +178,10 @@ new Wolfronix(config: WolfronixConfig | string)
 |--------|------|---------|-------------|
 | `baseUrl` | string | required | Wolfronix server URL |
 | `clientId` | string | `''` | Enterprise client ID |
+| `wolfronixKey` | string | `''` | API key for X-Wolfronix-Key auth |
 | `timeout` | number | `30000` | Request timeout (ms) |
 | `retries` | number | `3` | Max retry attempts |
-| `insecure` | boolean | `false` | Skip SSL verification |
+| `insecure` | boolean | `false` | Skip SSL verification (Node.js: uses undici Agent, or set `NODE_TLS_REJECT_UNAUTHORIZED=0`) |
 
 ### Authentication
 
@@ -202,8 +199,9 @@ new Wolfronix(config: WolfronixConfig | string)
 | Method | Description |
 |--------|-------------|
 | `encrypt(file, filename?)` | Encrypt and store file |
-| `decrypt(fileId)` | Decrypt file (returns Blob) |
-| `decryptToBuffer(fileId)` | Decrypt file (returns ArrayBuffer) |
+| `decrypt(fileId, role?)` | Decrypt file (zero-knowledge, returns Blob) |
+| `decryptToBuffer(fileId, role?)` | Decrypt file (zero-knowledge, returns ArrayBuffer) |
+| `getFileKey(fileId)` | Get encrypted key_part_a for client-side decryption |
 | `listFiles()` | List user's encrypted files |
 | `deleteFile(fileId)` | Delete encrypted file |
 
@@ -211,7 +209,7 @@ new Wolfronix(config: WolfronixConfig | string)
 
 | Method | Description |
 |--------|-------------|
-| `getPublicKey(userId)` | Fetch a user's RSA public key |
+| `getPublicKey(userId, clientId?)` | Fetch a user's RSA public key |
 | `encryptMessage(text, recipientId)` | Encrypt text for a recipient (returns packet string) |
 | `decryptMessage(packetString)` | Decrypt a received message packet |
 
@@ -221,6 +219,42 @@ new Wolfronix(config: WolfronixConfig | string)
 |--------|-------------|
 | `getMetrics()` | Get encryption/decryption stats |
 | `healthCheck()` | Check server availability |
+
+## Security Architecture (v2.0)
+
+### Zero-Knowledge Decryption Flow
+
+In v2.0, the private key **never leaves the client**. The decrypt flow works as follows:
+
+```
+Client                              Wolfronix Server
+  │                                       │
+  │  GET /files/{id}/key                  │
+  │──────────────────────────────────────>│
+  │  { key_part_a: "<RSA-OAEP encrypted>"}│
+  │<──────────────────────────────────────│
+  │                                       │
+  │  [Decrypt key_part_a locally          │
+  │   with private key (RSA-OAEP)]        │
+  │                                       │
+  │  POST /files/{id}/decrypt             │
+  │  { decrypted_key_a: "<base64>" }      │
+  │──────────────────────────────────────>│
+  │                                       │
+  │  [Server combines key_a + key_b,      │
+  │   decrypts with AES-256-GCM]         │
+  │                                       │
+  │  <decrypted file bytes>               │
+  │<──────────────────────────────────────│
+```
+
+### Key Security Properties
+- **AES-256-GCM** authenticated encryption (tamper-proof, replaces AES-CTR)
+- **RSA-OAEP** with SHA-256 for key transport (replaces PKCS1v15)
+- **API key authentication** via `X-Wolfronix-Key` header on all endpoints
+- **Configurable CORS** origins (no more wildcard `*`)
+- **Dual-key split**: AES key split in half, each half encrypted with different RSA key
+- **Zero-knowledge key wrapping**: Private keys wrapped with PBKDF2-derived keys, server never sees raw private keys
 
 ## Error Handling
 
@@ -278,7 +312,8 @@ import Wolfronix, {
 // All methods are fully typed
 const config: WolfronixConfig = {
   baseUrl: 'https://server:5002',
-  clientId: 'my-client'
+  clientId: 'my-client',
+  wolfronixKey: 'my-api-key'
 };
 
 const wfx = new Wolfronix(config);
@@ -292,12 +327,12 @@ const response: EncryptResponse = await wfx.encrypt(file);
 import { useState, useCallback, useMemo } from 'react';
 import Wolfronix, { FileInfo as WolfronixFile } from 'wolfronix-sdk';
 
-export function useWolfronix(baseUrl: string, clientId?: string) {
+export function useWolfronix(baseUrl: string, clientId?: string, wolfronixKey?: string) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [files, setFiles] = useState<WolfronixFile[]>([]);
 
-  const client = useMemo(() => new Wolfronix({ baseUrl, clientId }), [baseUrl, clientId]);
+  const client = useMemo(() => new Wolfronix({ baseUrl, clientId, wolfronixKey }), [baseUrl, clientId, wolfronixKey]);
 
   const login = useCallback(async (email: string, password: string) => {
     setIsLoading(true);
@@ -395,7 +430,7 @@ Wolfronix can be integrated into **any application** that handles sensitive data
 
 ## Requirements
 
-- Node.js 16+ (for Node.js usage)
+- Node.js 18+ (for Node.js usage)
 - Modern browser with Web Crypto API support
 
 ## License

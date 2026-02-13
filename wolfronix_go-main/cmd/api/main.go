@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -14,14 +14,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"wolfronixgo/internal/clientdb"
@@ -34,14 +39,12 @@ import (
 	_ "github.com/lib/pq"
 )
 
-// Chunk size for streaming (64KB - optimal for disk I/O)
-const CHUNK_SIZE = 64 * 1024
-
 // --- GLOBALS ---
 var (
 	ServerPrivateKey *rsa.PrivateKey
 	ServerPublicKey  *rsa.PublicKey
 	db               *sql.DB
+	adminAPIKey      string
 	metricsStore     *metrics.MetricsStore
 	keyWrapStore     *keywrap.KeyWrapStore
 	fakeGen          *fakegen.FakeDataGenerator
@@ -119,12 +122,22 @@ func main() {
 	// 1. Load or Generate Keys
 	loadOrGenerateKeys()
 
+	// 1b. Load Admin API Key (required for admin/management endpoints)
+	adminAPIKey = os.Getenv("ADMIN_API_KEY")
+	if adminAPIKey == "" {
+		log.Println("\u26a0\ufe0f  ADMIN_API_KEY not set — admin endpoints will reject all requests")
+	}
+
 	// 2. Connect DB
 	initDB()
+
+	// 2b. Initialize messaging subsystem
+	initMessaging()
 
 	// 3. Router
 	r := mux.NewRouter()
 	r.Use(corsMiddleware)
+	r.Use(apiKeyAuthMiddleware)
 
 	// Health check endpoint
 	r.HandleFunc("/health", healthCheckHandler).Methods("GET", "OPTIONS")
@@ -136,17 +149,20 @@ func main() {
 	r.HandleFunc("/api/v1/files", listFilesHandler).Methods("GET", "OPTIONS")
 	r.HandleFunc("/api/v1/files/{id}/decrypt", decryptStoredHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/api/v1/files/{id}", deleteStoredFileHandler).Methods("DELETE", "OPTIONS")
-	r.HandleFunc("/admin/clients", registerClientHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/api/v1/files/{id}/key", getFileKeyPartHandler).Methods("GET", "OPTIONS")
+	r.HandleFunc("/admin/clients", requireAdminKey(registerClientHandler)).Methods("POST", "OPTIONS")
 
 	// === ENTERPRISE CLIENT REGISTRATION ===
-	// Register a new client with their API endpoint (Enterprise mode)
-	r.HandleFunc("/api/v1/enterprise/register", registerEnterpriseClientHandler).Methods("POST", "OPTIONS")
-	// List registered clients
-	r.HandleFunc("/api/v1/enterprise/clients", listEnterpriseClientsHandler).Methods("GET", "OPTIONS")
-	// Get client info
-	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", getEnterpriseClientHandler).Methods("GET", "OPTIONS")
-	// Update client endpoint
-	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", updateEnterpriseClientHandler).Methods("PUT", "OPTIONS")
+	// Register a new client with their API endpoint (Enterprise mode) - ADMIN ONLY
+	r.HandleFunc("/api/v1/enterprise/register", requireAdminKey(registerEnterpriseClientHandler)).Methods("POST", "OPTIONS")
+	// List registered clients - ADMIN ONLY
+	r.HandleFunc("/api/v1/enterprise/clients", requireAdminKey(listEnterpriseClientsHandler)).Methods("GET", "OPTIONS")
+	// Get client info - ADMIN ONLY
+	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", requireAdminKey(getEnterpriseClientHandler)).Methods("GET", "OPTIONS")
+	// Update client endpoint - ADMIN ONLY
+	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", requireAdminKey(updateEnterpriseClientHandler)).Methods("PUT", "OPTIONS")
+	// Deactivate (revoke) a client - ADMIN ONLY
+	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", requireAdminKey(deactivateEnterpriseClientHandler)).Methods("DELETE", "OPTIONS")
 
 	// === ZERO-KNOWLEDGE KEY MANAGEMENT ROUTES ===
 	// Registration: Browser sends wrapped private key + public key
@@ -165,14 +181,51 @@ func main() {
 	r.HandleFunc("/api/v1/metrics/users", removeUserHandler).Methods("DELETE", "OPTIONS")
 	r.HandleFunc("/api/v1/metrics/login", recordUserLoginHandler).Methods("POST", "OPTIONS")
 
+	// === MESSAGE ENCRYPTION ROUTES ===
+	r.HandleFunc("/api/v1/messages/encrypt", messageEncryptHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/api/v1/messages/decrypt", messageDecryptHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/api/v1/messages/batch/encrypt", messageBatchEncryptHandler).Methods("POST", "OPTIONS")
+
+	// === STREAMING ENCRYPTION (WebSocket) ===
+	r.HandleFunc("/api/v1/stream", streamHandler).Methods("GET")
+
 	port := ":5001"
 	log.Printf("🚀 Wolfronix Cloud Engine Running on %s (HTTPS)", port)
 
-	// 4. Start Server (HTTPS)
-	err := http.ListenAndServeTLS(port, "server.crt", "server.key", r)
-	if err != nil {
-		log.Fatal("❌ Server Start Error: ", err)
+	// 4. Start Server with Graceful Shutdown
+	srv := &http.Server{
+		Addr:         port,
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
+
+	// Run server in goroutine
+	go func() {
+		if err := srv.ListenAndServeTLS("server.crt", "server.key"); err != nil && err != http.ErrServerClosed {
+			log.Fatal("❌ Server Start Error: ", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("\n⏳ Shutting down gracefully...")
+
+	// Flush metrics before shutdown
+	if metricsStore != nil {
+		metricsStore.Close()
+		log.Println("📊 Metrics flushed")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("❌ Forced shutdown: ", err)
+	}
+	log.Println("✅ Server stopped cleanly")
 }
 
 // --- HANDLERS ---
@@ -200,13 +253,10 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get client ID - REQUIRED in enterprise mode
-	clientID := r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = r.FormValue("client_id")
-	}
-	if clientID == "" {
-		http.Error(w, `{"error": "X-Client-ID header is required"}`, 400)
+	// Get authenticated client ID (enforces caller can only use their own client)
+	clientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error": "`+authErr.Error()+`"}`, 403)
 		return
 	}
 
@@ -228,60 +278,44 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	isDevEnv := r.Header.Get("X-Environment") == "dev" || r.FormValue("environment") == "dev"
 
-	// === LAYER 3: GENERATE AES-256 KEY & IV ===
+	// === LAYER 3: AES-256-GCM AUTHENTICATED ENCRYPTION ===
 	key := make([]byte, 32)
-	rand.Read(key)
-	iv := make([]byte, 16)
-	rand.Read(iv)
+	if _, err := rand.Read(key); err != nil {
+		log.Printf("❌ Crypto RNG failure: %v", err)
+		http.Error(w, `{"error": "Encryption init failed"}`, 500)
+		return
+	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		http.Error(w, `{"error": "Encryption init failed"}`, 500)
 		return
 	}
-	stream := cipher.NewCTR(block, iv)
-
-	// Create temp file for encryption
-	tmpFile, err := os.CreateTemp("", "wolfronix-enc-*")
+	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		log.Printf("❌ Failed to create temp file: %v", err)
-		http.Error(w, `{"error": "Temp file creation failed"}`, 500)
+		http.Error(w, `{"error": "Encryption init failed"}`, 500)
 		return
 	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	// === CHUNKED STREAMING ENCRYPTION ===
-	var totalSize int64 = 0
-	buffer := make([]byte, CHUNK_SIZE)
-	encBuffer := make([]byte, CHUNK_SIZE)
-	writer := bufio.NewWriter(tmpFile)
-
-	for {
-		n, err := file.Read(buffer)
-		if n > 0 {
-			stream.XORKeyStream(encBuffer[:n], buffer[:n])
-			_, writeErr := writer.Write(encBuffer[:n])
-			if writeErr != nil {
-				tmpFile.Close()
-				http.Error(w, `{"error": "Write error"}`, 500)
-				return
-			}
-			totalSize += int64(n)
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			tmpFile.Close()
-			http.Error(w, `{"error": "Read error"}`, 500)
-			return
-		}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		log.Printf("❌ Crypto RNG failure: %v", err)
+		http.Error(w, `{"error": "Encryption init failed"}`, 500)
+		return
 	}
-	writer.Flush()
-	tmpFile.Close()
 
-	log.Printf("📦 Encrypted %d bytes in chunks", totalSize)
+	// Read entire file for authenticated encryption
+	plaintext, err := io.ReadAll(file)
+	if err != nil {
+		log.Printf("❌ Failed to read file: %v", err)
+		http.Error(w, `{"error": "Read error"}`, 500)
+		return
+	}
+	totalSize := int64(len(plaintext))
+
+	// AES-256-GCM Seal: nonce is prepended to ciphertext+tag
+	encryptedData := gcm.Seal(nonce, nonce, plaintext, nil)
+
+	log.Printf("📦 Encrypted %d bytes with AES-256-GCM (authenticated)", totalSize)
 
 	// === LAYER 4: DUAL KEY SPLIT ===
 	encA := encryptRSA(key[:16], clientPubKey)
@@ -293,21 +327,13 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	duration := time.Since(start).Milliseconds()
 
-	// Read encrypted data for upload to client API
-	encryptedData, err := os.ReadFile(tmpPath)
-	if err != nil {
-		log.Printf("❌ Failed to read temp encrypted file: %v", err)
-		http.Error(w, `{"error": "Failed to read encrypted data"}`, 500)
-		return
-	}
-
 	// Create file metadata
 	fileMetadata := &clientdb.StoredFile{
 		Filename:    header.Filename,
 		FileSize:    totalSize,
 		KeyPartA:    encA,
 		KeyPartB:    encB,
-		IV:          base64.StdEncoding.EncodeToString(iv),
+		IV:          base64.StdEncoding.EncodeToString(nonce),
 		EncTimeMS:   duration,
 		ClientID:    clientID,
 		UserID:      userID,
@@ -384,10 +410,10 @@ func encryptRSA(data []byte, pubPEM string) string {
 		return ""
 	}
 
-	// 5. Encrypt
-	out, err := rsa.EncryptPKCS1v15(rand.Reader, pub, data)
+	// 5. Encrypt with RSA-OAEP (SHA-256)
+	out, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, pub, data, nil)
 	if err != nil {
-		log.Println("❌ RSA Encryption Failed:", err)
+		log.Println("❌ RSA-OAEP Encryption Failed:", err)
 		return ""
 	}
 
@@ -395,18 +421,14 @@ func encryptRSA(data []byte, pubPEM string) string {
 }
 
 func listFilesHandler(w http.ResponseWriter, r *http.Request) {
-	clientID := r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = r.URL.Query().Get("client_id")
+	clientID, err := getAuthenticatedClientID(r)
+	if err != nil {
+		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		return
 	}
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
 		userID = r.URL.Query().Get("user_id")
-	}
-
-	if clientID == "" {
-		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
-		return
 	}
 
 	if userID == "" {
@@ -457,31 +479,39 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	vars := mux.Vars(r)
-	id, _ := strconv.Atoi(vars["id"])
-
-	privKeyStr := r.Header.Get("X-Private-Key")
-	if privKeyStr == "" {
-		privKeyStr = r.FormValue("client_private_key")
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, `{"error": "Invalid file ID"}`, 400)
+		return
 	}
 
-	// Get client ID - REQUIRED in enterprise mode
-	clientID := r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = r.FormValue("client_id")
+	// Parse request body for decryption keys
+	var decryptReq struct {
+		DecryptedKeyA string `json:"decrypted_key_a"` // base64-encoded 16-byte key half (decrypted client-side)
+		ClientID      string `json:"client_id"`
+		UserID        string `json:"user_id"`
+		UserRole      string `json:"user_role"`
 	}
-	if clientID == "" {
-		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
+	if err := json.NewDecoder(r.Body).Decode(&decryptReq); err != nil {
+		http.Error(w, `{"error": "Invalid JSON request body"}`, 400)
+		return
+	}
+
+	// Get client ID - REQUIRED in enterprise mode (verified by middleware)
+	clientID, err := getAuthenticatedClientID(r)
+	if err != nil {
+		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
 		return
 	}
 
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
-		userID = r.FormValue("user_id")
+		userID = decryptReq.UserID
 	}
 
 	userRole := r.Header.Get("X-User-Role")
 	if userRole == "" {
-		userRole = r.FormValue("user_role")
+		userRole = decryptReq.UserRole
 	}
 	if userRole == "" {
 		userRole = "guest"
@@ -519,8 +549,13 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// === LAYER 4: UNLOCK DUAL KEYS ===
-	keyA := decryptRSA(fileMeta.KeyPartA, privKeyStr)
+	// === UNLOCK DUAL KEYS ===
+	var keyA []byte
+	keyA, err = base64.StdEncoding.DecodeString(decryptReq.DecryptedKeyA)
+	if err != nil || len(keyA) != 16 {
+		http.Error(w, `{"error": "decrypted_key_a is required (base64-encoded 16-byte key half)"}`, 400)
+		return
+	}
 	keyB := decryptRSA(fileMeta.KeyPartB, privateKeyToPEM(ServerPrivateKey))
 
 	if keyA == nil || keyB == nil {
@@ -531,14 +566,32 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// === LAYER 3: AES DECRYPTION ===
+	// === LAYER 3: AES-256-GCM AUTHENTICATED DECRYPTION ===
 	fullKey := append(keyA, keyB...)
-	iv, _ := base64.StdEncoding.DecodeString(fileMeta.IV)
-	block, _ := aes.NewCipher(fullKey)
-	stream := cipher.NewCTR(block, iv)
-
-	decData := make([]byte, len(encData))
-	stream.XORKeyStream(decData, encData)
+	block, err := aes.NewCipher(fullKey)
+	if err != nil {
+		http.Error(w, `{"error": "Decryption init failed"}`, 500)
+		return
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		http.Error(w, `{"error": "Decryption init failed"}`, 500)
+		return
+	}
+	nonceSize := gcm.NonceSize()
+	if len(encData) < nonceSize {
+		http.Error(w, `{"error": "Encrypted data corrupted"}`, 400)
+		return
+	}
+	gcmNonce, ciphertext := encData[:nonceSize], encData[nonceSize:]
+	decData, err := gcm.Open(nil, gcmNonce, ciphertext, nil)
+	if err != nil {
+		if metricsStore != nil {
+			metricsStore.RecordError(clientID, userID, "decrypt", "Integrity check failed: "+err.Error())
+		}
+		http.Error(w, `{"error": "Decryption failed - data integrity check failed"}`, 403)
+		return
+	}
 
 	// === LAYER 2: DYNAMIC RBAC MASKING ===
 	contentType := http.DetectContentType(decData)
@@ -559,8 +612,14 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 		metricsStore.RecordDecryption(clientID, userID, duration, 1, int64(len(decData)))
 	}
 
-	// Set response headers
-	w.Header().Set("Content-Disposition", "attachment; filename="+fileMeta.Filename)
+	// Set response headers (sanitize filename to prevent header injection)
+	safeFilename := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '"' || r == '\\' {
+			return '_'
+		}
+		return r
+	}, fileMeta.Filename)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, safeFilename))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Masking-Applied", userRole)
 	w.Write(decData)
@@ -576,12 +635,62 @@ func deleteStoredFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID := r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = r.URL.Query().Get("client_id")
+	clientID, err := getAuthenticatedClientID(r)
+	if err != nil {
+		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		return
 	}
-	if clientID == "" {
-		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
+
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = r.URL.Query().Get("user_id")
+	}
+
+	if clientRegistry == nil || clientDBConn == nil {
+		http.Error(w, `{"error": "Enterprise mode not initialized"}`, 503)
+		return
+	}
+
+	config, err2 := clientRegistry.GetClientConfig(clientID)
+	if err2 != nil {
+		http.Error(w, `{"error": "Client not registered"}`, 400)
+		return
+	}
+
+	err2 = clientDBConn.DeleteFile(config, int64(id), userID)
+	if err2 != nil {
+		log.Printf("⚠️ Failed to delete file %d: %v", id, err2)
+		http.Error(w, `{"error": "Failed to delete file"}`, 500)
+		return
+	}
+
+	if metricsStore != nil {
+		metricsStore.RecordEncryption(clientID, userID, 0, -1, 0)
+	}
+
+	log.Printf("🗑️ File %d deleted by user %s [enterprise]", id, userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "File deleted successfully",
+	})
+}
+
+// getFileKeyPartHandler returns the encrypted key_part_a for client-side decryption
+// The client decrypts this locally with their private key, then sends the result
+// to the decrypt endpoint as decrypted_key_a (private key never leaves the client)
+func getFileKeyPartHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, `{"error": "Invalid file ID"}`, 400)
+		return
+	}
+
+	clientID, clientErr := getAuthenticatedClientID(r)
+	if clientErr != nil {
+		http.Error(w, `{"error": "`+clientErr.Error()+`"}`, 403)
 		return
 	}
 
@@ -601,23 +710,17 @@ func deleteStoredFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = clientDBConn.DeleteFile(config, int64(id), userID)
+	fileMeta, err := clientDBConn.GetFileMetadata(config, int64(id), userID)
 	if err != nil {
-		log.Printf("⚠️ Failed to delete file %d: %v", id, err)
-		http.Error(w, `{"error": "Failed to delete file"}`, 500)
+		http.Error(w, `{"error": "File not found"}`, 404)
 		return
 	}
 
-	if metricsStore != nil {
-		metricsStore.RecordEncryption(clientID, userID, 0, -1, 0)
-	}
-
-	log.Printf("🗑️ File %d deleted by user %s [enterprise]", id, userID)
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "File deleted successfully",
+	json.NewEncoder(w).Encode(map[string]string{
+		"file_id":    vars["id"],
+		"key_part_a": fileMeta.KeyPartA,
+		"message":    "Decrypt key_part_a locally with your private key, then send the 16-byte result base64-encoded as decrypted_key_a to the decrypt endpoint",
 	})
 }
 
@@ -635,12 +738,9 @@ func getUserKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID := r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = r.URL.Query().Get("client_id")
-	}
-	if clientID == "" {
-		http.Error(w, `{"error": "X-Client-ID is required"}`, 400)
+	clientID, clientErr := getAuthenticatedClientID(r)
+	if clientErr != nil {
+		http.Error(w, `{"error": "`+clientErr.Error()+`"}`, 403)
 		return
 	}
 
@@ -674,8 +774,12 @@ func registerClientHandler(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
-	hash := sha256.Sum256([]byte(req.Name + time.Now().String()))
-	json.NewEncoder(w).Encode(map[string]string{"api_key": hex.EncodeToString(hash[:])})
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		http.Error(w, `{"error": "Key generation failed"}`, 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"api_key": hex.EncodeToString(keyBytes)})
 }
 
 // === ENTERPRISE CLIENT MANAGEMENT ===
@@ -704,9 +808,20 @@ func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate Wolfronix API key for this client
-	hash := sha256.Sum256([]byte(req.ClientID + req.ClientName + time.Now().String()))
-	wolfronixKey := hex.EncodeToString(hash[:])
+	// Generate Wolfronix API key for this client (cryptographically random)
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		http.Error(w, `{"error": "Key generation failed"}`, 500)
+		return
+	}
+	wolfronixKey := hex.EncodeToString(keyBytes)
+
+	// Validate api_endpoint to prevent SSRF
+	parsedURL, err := url.Parse(req.APIEndpoint)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		http.Error(w, `{"error": "api_endpoint must be a valid http/https URL"}`, 400)
+		return
+	}
 
 	client := &clientdb.RegisteredClient{
 		ClientID:     req.ClientID,
@@ -795,6 +910,13 @@ func updateEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.APIEndpoint != "" {
+		// Validate api_endpoint to prevent SSRF (same validation as register handler)
+		parsedURL, err := url.Parse(req.APIEndpoint)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+			http.Error(w, `{"error": "api_endpoint must be a valid http/https URL"}`, 400)
+			return
+		}
+
 		if err := clientRegistry.UpdateClientEndpoint(clientID, req.APIEndpoint); err != nil {
 			http.Error(w, "Failed to update client", 500)
 			return
@@ -805,6 +927,32 @@ func updateEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "success",
 		"message": "Client updated",
+	})
+}
+
+// deactivateEnterpriseClientHandler deactivates a client (revokes their access)
+// DELETE /api/v1/enterprise/clients/{clientID}
+func deactivateEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
+	if clientRegistry == nil {
+		http.Error(w, "Client registry not initialized", 503)
+		return
+	}
+
+	vars := mux.Vars(r)
+	clientID := vars["clientID"]
+
+	if err := clientRegistry.DeactivateClient(clientID); err != nil {
+		log.Printf("❌ Failed to deactivate client %s: %v", clientID, err)
+		http.Error(w, `{"error": "Failed to deactivate client"}`, 500)
+		return
+	}
+
+	log.Printf("🚫 Enterprise client deactivated: %s", clientID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Client deactivated. Their API key will no longer work.",
 	})
 }
 
@@ -828,21 +976,32 @@ func loadOrGenerateKeys() {
 	// If missing or invalid, generate FRESH pair
 	if ServerPrivateKey == nil {
 		log.Println("⚙️  Generating Fresh 2048-bit RSA Keys & Self-Signed Certs...")
-		ServerPrivateKey, _ = rsa.GenerateKey(rand.Reader, 2048)
+		var err error
+		ServerPrivateKey, err = rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			log.Fatal("❌ Failed to generate RSA keys: ", err)
+		}
 
 		// Save Private Key
 		keyOut, _ := os.Create("server.key")
 		pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(ServerPrivateKey)})
 		keyOut.Close()
 
-		// Generate Cert
+		// Generate Cert with SANs for modern TLS clients
 		template := x509.Certificate{
 			SerialNumber: big.NewInt(1),
 			Subject:      pkix.Name{Organization: []string{"Wolfronix Secure"}},
+			DNSNames:     []string{"localhost", "wolfronix", "wolfronix-engine"},
+			IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 			NotBefore:    time.Now(),
 			NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		}
-		derBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, &ServerPrivateKey.PublicKey, ServerPrivateKey)
+		derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &ServerPrivateKey.PublicKey, ServerPrivateKey)
+		if err != nil {
+			log.Fatal("❌ Failed to create certificate: ", err)
+		}
 
 		// Save Cert
 		certOut, _ := os.Create("server.crt")
@@ -872,7 +1031,11 @@ func decryptRSA(b64 string, privPEM string) []byte {
 		return nil
 	}
 
-	out, _ := rsa.DecryptPKCS1v15(rand.Reader, priv, data)
+	out, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, priv, data, nil)
+	if err != nil {
+		log.Printf("\u274c RSA-OAEP Decryption Failed: %v", err)
+		return nil
+	}
 	return out
 }
 
@@ -917,16 +1080,136 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
+	allowedOrigins := getAllowedOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
+		origin := r.Header.Get("Origin")
+		allowed := false
+		for _, o := range allowedOrigins {
+			if strings.TrimSpace(o) == origin {
+				allowed = true
+				break
+			}
+		}
+		if allowed {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Client-ID, X-User-ID, X-User-Role, X-Wolfronix-Key, X-Environment")
 		w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Masking-Applied")
+		w.Header().Set("Vary", "Origin")
 		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// getAllowedOrigins returns configured CORS origins from ALLOWED_ORIGINS env var
+func getAllowedOrigins() []string {
+	origins := os.Getenv("ALLOWED_ORIGINS")
+	if origins == "" {
+		return []string{
+			"http://localhost:5500", "https://localhost:5500",
+			"http://localhost:3000", "https://localhost:3000",
+			"http://127.0.0.1:5500", "https://127.0.0.1:5500",
+		}
+	}
+	return strings.Split(origins, ",")
+}
+
+// getAuthenticatedClientID returns the client ID that was verified by apiKeyAuthMiddleware.
+// It rejects requests where the caller-supplied X-Client-ID doesn't match the authenticated identity.
+// This prevents client impersonation (e.g., client A using client B's X-Client-ID).
+func getAuthenticatedClientID(r *http.Request) (string, error) {
+	authenticatedID := r.Header.Get("X-Authenticated-Client-ID")
+	if authenticatedID == "" {
+		return "", errors.New("not authenticated")
+	}
+
+	// Check all sources where handlers read client ID
+	suppliedID := r.Header.Get("X-Client-ID")
+	if suppliedID == "" {
+		suppliedID = r.FormValue("client_id")
+	}
+	if suppliedID == "" {
+		suppliedID = r.URL.Query().Get("client_id")
+	}
+
+	// If caller explicitly supplied a client ID, it MUST match the authenticated one
+	if suppliedID != "" && suppliedID != authenticatedID {
+		return "", fmt.Errorf("client ID mismatch: authenticated as %q but requested %q", authenticatedID, suppliedID)
+	}
+
+	return authenticatedID, nil
+}
+
+// apiKeyAuthMiddleware validates X-Wolfronix-Key header for all API endpoints
+func apiKeyAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth for health check and public key endpoint
+		if r.URL.Path == "/health" || r.URL.Path == "/api/v1/keys" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Admin endpoints use X-Admin-Key (handled by requireAdminKey wrapper)
+		if r.URL.Path == "/api/v1/enterprise/register" || r.URL.Path == "/admin/clients" ||
+			strings.HasPrefix(r.URL.Path, "/api/v1/enterprise/clients") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Skip OPTIONS preflight
+		if r.Method == "OPTIONS" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		wolfronixKey := r.Header.Get("X-Wolfronix-Key")
+		if wolfronixKey == "" {
+			// Fallback to query param (for WebSocket — browsers can't set custom headers)
+			wolfronixKey = r.URL.Query().Get("wolfronix_key")
+		}
+		if wolfronixKey == "" {
+			http.Error(w, `{"error": "Missing X-Wolfronix-Key authentication header"}`, 401)
+			return
+		}
+
+		if clientRegistry == nil {
+			http.Error(w, `{"error": "Auth system not initialized"}`, 503)
+			return
+		}
+
+		client, err := clientRegistry.GetClientByWolfronixKey(wolfronixKey)
+		if err != nil {
+			http.Error(w, `{"error": "Invalid API key"}`, 403)
+			return
+		}
+
+		// Set authenticated client ID for downstream handlers
+		r.Header.Set("X-Authenticated-Client-ID", client.ClientID)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requireAdminKey wraps a handler to require ADMIN_API_KEY via X-Admin-Key header.
+// Admin endpoints skip the normal wolfronix-key auth (handled before apiKeyAuthMiddleware).
+func requireAdminKey(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "OPTIONS" {
+			handler(w, r)
+			return
+		}
+		key := r.Header.Get("X-Admin-Key")
+		if adminAPIKey == "" {
+			http.Error(w, `{"error": "Admin endpoint not configured (ADMIN_API_KEY not set)"}`, 503)
+			return
+		}
+		if key != adminAPIKey {
+			http.Error(w, `{"error": "Invalid or missing X-Admin-Key"}`, 403)
+			return
+		}
+		handler(w, r)
+	}
 }
 
 // --- METRICS HANDLERS ---

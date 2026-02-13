@@ -4,6 +4,7 @@ import Wolfronix, {
   WolfronixError,
   AuthenticationError,
   ValidationError,
+  KeyPartResponse,
   createClient
 } from '../src/index';
 
@@ -13,7 +14,8 @@ describe('Wolfronix SDK', () => {
   beforeEach(() => {
     client = new Wolfronix({
       baseUrl: 'https://localhost:5002',
-      clientId: 'test-client'
+      clientId: 'test-client',
+      wolfronixKey: 'test-api-key'
     });
   });
 
@@ -22,6 +24,7 @@ describe('Wolfronix SDK', () => {
       const wfx = new Wolfronix({
         baseUrl: 'https://server:5002',
         clientId: 'my-client',
+        wolfronixKey: 'my-api-key',
         timeout: 60000,
         retries: 5
       });
@@ -86,6 +89,10 @@ describe('Wolfronix SDK', () => {
       await expect(client.decrypt('file-id')).rejects.toThrow(AuthenticationError);
     });
 
+    it('should throw AuthenticationError for getFileKey when not logged in', async () => {
+      await expect(client.getFileKey('file-id')).rejects.toThrow(AuthenticationError);
+    });
+
     it('should throw AuthenticationError for listFiles when not logged in', async () => {
       await expect(client.listFiles()).rejects.toThrow(AuthenticationError);
     });
@@ -102,6 +109,10 @@ describe('Wolfronix SDK', () => {
 
     it('should throw ValidationError for empty file ID in decrypt', async () => {
       await expect(client.decrypt('')).rejects.toThrow(ValidationError);
+    });
+
+    it('should throw ValidationError for empty file ID in getFileKey', async () => {
+      await expect(client.getFileKey('')).rejects.toThrow(ValidationError);
     });
 
     it('should throw ValidationError for empty file ID in delete', async () => {
@@ -157,7 +168,7 @@ describe('Integration Tests (requires running server)', () => {
   });
 
   it.skip('should encrypt and decrypt a file', async () => {
-    const client = new Wolfronix({ baseUrl: TEST_SERVER, insecure: true });
+    const client = new Wolfronix({ baseUrl: TEST_SERVER, wolfronixKey: 'test-key', insecure: true });
     await client.login(TEST_EMAIL, TEST_PASSWORD);
 
     const testData = 'Hello, Wolfronix!';
@@ -167,7 +178,7 @@ describe('Integration Tests (requires running server)', () => {
     const { file_id } = await client.encrypt(blob, 'test.txt');
     expect(file_id).toBeDefined();
 
-    // Decrypt
+    // Decrypt (zero-knowledge: fetches key_part_a, decrypts client-side, sends decrypted_key_a)
     const decrypted = await client.decrypt(file_id);
     const text = await decrypted.text();
     expect(text).toBe(testData);

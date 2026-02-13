@@ -3,9 +3,9 @@ services:
     image: postgres:15-alpine
     container_name: wolfronix_db
     environment:
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=secretpassword
-      - POSTGRES_DB=client_vault
+      - POSTGRES_USER=${DB_USER:-admin}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      - POSTGRES_DB=${DB_NAME:-client_vault}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -27,15 +27,18 @@ services:
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_USER=admin
-      - DB_PASS=secretpassword
-      - DB_NAME=client_vault
+      - DB_USER=${DB_USER:-admin}
+      - DB_PASS=${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      - DB_NAME=${DB_NAME:-client_vault}
       # Client Database API Configuration (Universal DB Connector)
       - CLIENT_DB_API_ENDPOINT=${CLIENT_DB_API_ENDPOINT:-}
       - CLIENT_DB_API_KEY=${CLIENT_DB_API_KEY:-}
       - CLIENT_DB_TYPE=${CLIENT_DB_TYPE:-custom_api}
       - CLIENT_DB_TIMEOUT=${CLIENT_DB_TIMEOUT:-30s}
       - CLIENT_DB_RETRY_COUNT=${CLIENT_DB_RETRY_COUNT:-3}
+      # Security
+      - ADMIN_API_KEY=${ADMIN_API_KEY:?Set ADMIN_API_KEY in .env}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
       # Large file handling
       - GOGC=50
       - GOMEMLIMIT=6GiB

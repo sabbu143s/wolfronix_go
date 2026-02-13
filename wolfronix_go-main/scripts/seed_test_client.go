@@ -1,90 +1,75 @@
 // seed_test_client.go
-// Run this to create a test client in the Wolfronix Engine database
+// Registers a test enterprise client via the Wolfronix API
 // Usage: go run scripts/seed_test_client.go
+//
+// Requires a running Wolfronix engine at https://localhost:5001
 
 package main
 
 import (
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	"time"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	"net/http"
 )
 
-// Client model (must match database.go)
-type Client struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	Name            string    `json:"name"`
-	APIKey          string    `gorm:"unique;not null;index" json:"api_key"`
-	IsActive        bool      `json:"is_active"`
-	CreatedAt       time.Time `json:"created_at"`
-	Plan            string    `json:"plan"`
-	APICallsLimit   int64     `json:"api_calls_limit"`
-	APICallsUsed    int64     `json:"api_calls_used"`
-	SeatsLimit      int       `json:"seats_limit"`
-	SeatsUsed       int       `json:"seats_used"`
-	UsageResetDate  time.Time `json:"usage_reset_date"`
-	SubscriptionEnd time.Time `json:"subscription_end"`
-}
-
 func main() {
-	// Connect to the SQLite database
-	db, err := gorm.Open(sqlite.Open("wolfronix_data/wolfronix.db"), &gorm.Config{})
+	// Skip TLS verify for self-signed certs in dev
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	baseURL := "https://localhost:5001"
+
+	payload := map[string]string{
+		"client_id":    "test-client-01",
+		"client_name":  "Test Client (TC)",
+		"api_endpoint": "http://localhost:8080/wolfronix",
+		"api_key":      "client-storage-api-key",
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", baseURL+"/api/v1/enterprise/register", bytes.NewReader(body))
 	if err != nil {
-		log.Fatal("❌ Failed to connect to database:", err)
+		log.Fatal("❌ Failed to create request:", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal("❌ Failed to connect to Wolfronix engine:", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		log.Fatalf("❌ Registration failed (HTTP %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	// Auto-migrate to ensure table exists
-	db.AutoMigrate(&Client{})
+	var result map[string]interface{}
+	json.Unmarshal(respBody, &result)
 
-	// ===== TEST CLIENT DATA =====
-	// This is the key you'll use in X-Wolfronix-Key header
-	testAPIKey := "wfx_test_client_12345678"
-
-	testClient := Client{
-		Name:            "Test Client (TC)",
-		APIKey:          testAPIKey,
-		IsActive:        true,
-		CreatedAt:       time.Now(),
-		Plan:            "PRO",
-		APICallsLimit:   100000, // 100k API calls
-		APICallsUsed:    0,      // Start fresh
-		SeatsLimit:      10,
-		SeatsUsed:       1,
-		UsageResetDate:  time.Now().AddDate(0, 1, 0), // Reset in 1 month
-		SubscriptionEnd: time.Now().AddDate(1, 0, 0), // Expires in 1 year
-	}
-
-	// Check if test client already exists
-	var existingClient Client
-	result := db.Where("api_key = ?", testAPIKey).First(&existingClient)
-
-	if result.Error == nil {
-		// Update existing
-		db.Model(&existingClient).Updates(testClient)
-		fmt.Println("✅ Test Client UPDATED in database!")
-	} else {
-		// Create new
-		db.Create(&testClient)
-		fmt.Println("✅ Test Client CREATED in database!")
-	}
-
-	// Print summary
 	fmt.Println("")
 	fmt.Println("═══════════════════════════════════════════════════════════")
-	fmt.Println("                    TEST CLIENT DETAILS                     ")
+	fmt.Println("                    TEST CLIENT REGISTERED                  ")
 	fmt.Println("═══════════════════════════════════════════════════════════")
-	fmt.Printf("  Name:           %s\n", testClient.Name)
-	fmt.Printf("  API Key:        %s\n", testClient.APIKey)
-	fmt.Printf("  Plan:           %s\n", testClient.Plan)
-	fmt.Printf("  API Calls:      %d / %d\n", testClient.APICallsUsed, testClient.APICallsLimit)
-	fmt.Printf("  Status:         Active\n")
-	fmt.Printf("  Expires:        %s\n", testClient.SubscriptionEnd.Format("2006-01-02"))
+	fmt.Printf("  Client ID:      %s\n", payload["client_id"])
+	fmt.Printf("  Client Name:    %s\n", payload["client_name"])
+	fmt.Printf("  API Endpoint:   %s\n", payload["api_endpoint"])
+	if wfxKey, ok := result["wolfronix_key"]; ok {
+		fmt.Printf("  Wolfronix Key:  %v\n", wfxKey)
+	}
 	fmt.Println("═══════════════════════════════════════════════════════════")
 	fmt.Println("")
 	fmt.Println("📋 Use this header in your API requests:")
-	fmt.Printf("   X-Wolfronix-Key: %s\n", testClient.APIKey)
+	if wfxKey, ok := result["wolfronix_key"]; ok {
+		fmt.Printf("   X-Wolfronix-Key: %v\n", wfxKey)
+	}
 	fmt.Println("")
 }

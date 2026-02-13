@@ -92,7 +92,15 @@ if [ ! -f "${SCRIPT_DIR}/.env" ]; then
     DB_PASSWORD=$(openssl rand -hex 16)
     JWT_SECRET=$(openssl rand -hex 32)
     MASTER_KEY=$(openssl rand -hex 32)
+    ADMIN_API_KEY=$(openssl rand -hex 32)
     
+    # Default to letsencrypt if a real domain is provided, otherwise selfsigned
+    if [ "${DOMAIN}" != "localhost" ]; then
+        DEFAULT_SSL_MODE="letsencrypt"
+    else
+        DEFAULT_SSL_MODE="selfsigned"
+    fi
+
     cat > "${SCRIPT_DIR}/.env" << EOF
 # Wolfronix Production Configuration
 # Generated on $(date)
@@ -103,6 +111,7 @@ DB_PASSWORD=${DB_PASSWORD}
 # Security Keys
 JWT_SECRET=${JWT_SECRET}
 MASTER_KEY=${MASTER_KEY}
+ADMIN_API_KEY=${ADMIN_API_KEY}
 
 # Server
 DOMAIN=${DOMAIN}
@@ -110,8 +119,18 @@ DATA_PATH=${DATA_PATH}
 WOLFRONIX_ENV=production
 GOMEMLIMIT=24GiB
 
+# CORS (comma-separated origins, or * for all)
+ALLOWED_ORIGINS=https://${DOMAIN}
+
+# Enterprise Client DB (configure if using enterprise mode)
+# CLIENT_DB_API_ENDPOINT=http://your-client-api:8080/api
+# CLIENT_DB_API_KEY=your-client-api-key
+# CLIENT_DB_TYPE=custom_api
+# CLIENT_DB_TIMEOUT=30s
+# CLIENT_DB_RETRY_COUNT=3
+
 # SSL
-SSL_MODE=selfsigned
+SSL_MODE=${DEFAULT_SSL_MODE}
 SSL_EMAIL=admin@${DOMAIN}
 EOF
     
@@ -191,10 +210,12 @@ echo -e "${GREEN}✓ Build complete${NC}"
 
 echo -e "${YELLOW}[6/8] Starting services...${NC}"
 
-# Stop any existing deployment and clean stale volumes
-echo -e "${YELLOW}Cleaning up any previous deployment...${NC}"
-${COMPOSE_CMD} -f docker-compose.prod.yml down -v 2>/dev/null || true
-rm -rf "${DATA_PATH}/postgres"/*
+# Stop existing containers (keep volumes to preserve data)
+echo -e "${YELLOW}Stopping any previous containers...${NC}"
+${COMPOSE_CMD} -f docker-compose.prod.yml down 2>/dev/null || true
+
+# Ensure data directories exist
+mkdir -p "${DATA_PATH}"
 mkdir -p "${DATA_PATH}/postgres"
 
 ${COMPOSE_CMD} -f docker-compose.prod.yml up -d
@@ -258,9 +279,13 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 echo ""
 echo -e "${BLUE}Server Information:${NC}"
-echo "  URL:      https://${DOMAIN}:9443"
-echo "  Health:   https://${DOMAIN}:9443/health"
-echo "  API:      https://${DOMAIN}:9443/api/v1/"
+echo "  URL:        https://${DOMAIN}:9443"
+echo "  Health:     https://${DOMAIN}:9443/health"
+echo "  API:        https://${DOMAIN}:9443/api/v1/"
+echo "  WebSocket:  wss://${DOMAIN}:9443/api/v1/stream"
+echo ""
+echo -e "${BLUE}Admin API Key (save this!):${NC}"
+echo "  ${ADMIN_API_KEY:-<check .env file>}"
 echo ""
 echo -e "${BLUE}Service Status:${NC}"
 ${COMPOSE_CMD} -f docker-compose.prod.yml ps

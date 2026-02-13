@@ -9,10 +9,13 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/wolfronix/deploy
-ExecStart=/usr/bin/docker-compose -f docker-compose.prod.yml up -d
-ExecStop=/usr/bin/docker-compose -f docker-compose.prod.yml down
-ExecReload=/usr/bin/docker-compose -f docker-compose.prod.yml restart
+# Use docker compose v2 plugin (preferred) with fallback to docker-compose v1
+ExecStart=/bin/bash -c 'docker compose -f docker-compose.prod.yml up -d || docker-compose -f docker-compose.prod.yml up -d'
+ExecStop=/bin/bash -c 'docker compose -f docker-compose.prod.yml down || docker-compose -f docker-compose.prod.yml down'
+ExecReload=/bin/bash -c 'docker compose -f docker-compose.prod.yml restart || docker-compose -f docker-compose.prod.yml restart'
 TimeoutStartSec=300
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

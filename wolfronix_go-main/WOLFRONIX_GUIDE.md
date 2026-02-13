@@ -83,9 +83,10 @@
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | POST | `/api/v1/encrypt` | Encrypt and store file |
-| GET | `/api/v1/decrypt/{file_id}` | Decrypt stored file |
+| GET | `/api/v1/files/{id}/key` | Get encrypted key_part_a (Step 1 of zero-knowledge decrypt) |
+| POST | `/api/v1/files/{id}/decrypt` | Decrypt file with decrypted_key_a (Step 2+3 of zero-knowledge decrypt) |
 | GET | `/api/v1/files` | List user's files |
-| DELETE | `/api/v1/files/{file_id}` | Delete a file |
+| DELETE | `/api/v1/files/{id}` | Delete a file |
 
 ### Streaming (Large Files)
 | Method | Endpoint | Purpose |
@@ -313,81 +314,143 @@ user_id: uuid-here
 
 ---
 
-### 4. File Decryption Workflow
+### 4. File Decryption Workflow (Zero-Knowledge 3-Step Flow)
+
+The private key **NEVER** leaves the client. Instead, the SDK performs a 3-step protocol:
 
 ```
-┌──────────┐         ┌─────────────┐         ┌──────────┐         ┌────────────┐
-│  Client  │         │  Wolfronix  │         │ Local DB │         │ Client API │
-└────┬─────┘         └──────┬──────┘         └────┬─────┘         └─────┬──────┘
-     │                      │                     │                     │
-     │  GET /decrypt/{id}   │                     │                     │
-     │  Authorization: JWT  │                     │                     │
-     │─────────────────────>│                     │                     │
-     │                      │                     │                     │
-     │                      │  Validate JWT       │                     │
-     │                      │  Extract user_id    │                     │
-     │                      │                     │                     │
-     │                      │  Check storage mode │                     │
-     │                      │─────────────────────│                     │
-     │                      │                     │                     │
-     │                      │  [SELF-HOSTED]      │                     │
-     │                      │  Get from local     │                     │
-     │                      │<───────────────────>│                     │
-     │                      │                     │                     │
-     │                      │  [ENTERPRISE]       │                     │
-     │                      │  GET from client API│<───────────────────>│
-     │                      │                     │                     │
-     │                      │                     │                     │
-     │                      │ ┌─────────────────────────────────────┐   │
-     │                      │ │ Verify file belongs to user         │   │
-     │                      │ └─────────────────────────────────────┘   │
-     │                      │                     │                     │
-     │                      │ ┌─────────────────────────────────────┐   │
-     │                      │ │ LAYER 4: Reassemble chunks          │   │
-     │                      │ └─────────────────────────────────────┘   │
-     │                      │                     │                     │
-     │                      │ ┌─────────────────────────────────────┐   │
-     │                      │ │ LAYER 2: Key Unwrapping             │   │
-     │                      │ │ - Get user's wrapped key            │   │
-     │                      │ │ - Unwrap with master key            │   │
-     │                      │ └─────────────────────────────────────┘   │
-     │                      │                     │                     │
-     │                      │ ┌─────────────────────────────────────┐   │
-     │                      │ │ LAYER 3: AES-256-GCM Decryption     │   │
-     │                      │ │ - Extract nonce                     │   │
-     │                      │ │ - Decrypt with user's key           │   │
-     │                      │ └─────────────────────────────────────┘   │
-     │                      │                     │                     │
-     │  <decrypted file>    │                     │                     │
-     │<─────────────────────│                     │                     │
-     │                      │                     │                     │
+┌──────────┐         ┌─────────────┐                    ┌────────────┐
+│  Client  │         │  Wolfronix  │                    │ Client API │
+│  (SDK)   │         │   Engine    │                    │  (DB)      │
+└────┬─────┘         └──────┬──────┘                    └─────┬──────┘
+     │                      │                                 │
+     │  ═══ STEP 1: Fetch Encrypted Key Half ═══              │
+     │                      │                                 │
+     │  GET /files/{id}/key │                                 │
+     │  X-Wolfronix-Key     │                                 │
+     │─────────────────────>│                                 │
+     │                      │  Fetch file metadata            │
+     │                      │────────────────────────────────>│
+     │                      │<────────────────────────────────│
+     │                      │                                 │
+     │  {key_part_a: "..."}│  (RSA-OAEP encrypted            │
+     │  (encrypted blob)    │   16-byte key half)             │
+     │<─────────────────────│                                 │
+     │                      │                                 │
+     │  ═══ STEP 2: Client-Side Decryption (LOCAL) ═══        │
+     │                      │                                 │
+     │  ┌──────────────────────────────────┐                  │
+     │  │ RSA-OAEP decrypt key_part_a      │                  │
+     │  │ using Private Key (in memory)    │                  │
+     │  │ → produces 16-byte cleartext     │                  │
+     │  │ → base64-encode result           │                  │
+     │  │                                  │                  │
+     │  │ ⚠️  Private Key stays HERE       │                  │
+     │  │    Never sent to any server!     │                  │
+     │  └──────────────────────────────────┘                  │
+     │                      │                                 │
+     │  ═══ STEP 3: Send Decrypted Key Half to Server ═══     │
+     │                      │                                 │
+     │  POST /files/{id}/decrypt                              │
+     │  {decrypted_key_a,   │                                 │
+     │   user_role}         │                                 │
+     │─────────────────────>│                                 │
+     │                      │                                 │
+     │                      │ ┌─────────────────────────────────────┐
+     │                      │ │ LAYER 4: Dual-Key Reconstruction    │
+     │                      │ │ - keyA = base64decode(decrypted_    │
+     │                      │ │         key_a) → 16 bytes           │
+     │                      │ │ - keyB = RSA decrypt key_part_b     │
+     │                      │ │         with Server Private Key     │
+     │                      │ │         → 16 bytes                  │
+     │                      │ │ - fullKey = keyA + keyB (32 bytes)  │
+     │                      │ └─────────────────────────────────────┘
+     │                      │                                 │
+     │                      │  Fetch encrypted data           │
+     │                      │────────────────────────────────>│
+     │                      │<────────────────────────────────│
+     │                      │                                 │
+     │                      │ ┌─────────────────────────────────────┐
+     │                      │ │ LAYER 3: AES-256-GCM Decryption    │
+     │                      │ │ - Extract nonce (first 12 bytes)   │
+     │                      │ │ - Decrypt with fullKey (32-byte)   │
+     │                      │ │ - Verify authentication tag        │
+     │                      │ └─────────────────────────────────────┘
+     │                      │                                 │
+     │                      │ ┌─────────────────────────────────────┐
+     │                      │ │ LAYER 2: RBAC Dynamic Masking      │
+     │                      │ │ - If text file (.txt/.csv/.json):  │
+     │                      │ │   mask sensitive fields by role    │
+     │                      │ │ - owner: full access               │
+     │                      │ │ - analyst: partial masking         │
+     │                      │ │ - guest: heavy masking             │
+     │                      │ └─────────────────────────────────────┘
+     │                      │                                 │
+     │  <decrypted file>    │                                 │
+     │  (masked by role)    │                                 │
+     │<─────────────────────│                                 │
+     │                      │                                 │
 ```
 
-**Request:**
+**Step 1 — Fetch Encrypted Key Half:**
 ```http
-GET /api/v1/decrypt/file-uuid-here
-Authorization: Bearer <jwt-token>
-X-Client-ID: client-uuid (optional, for enterprise)
+GET /api/v1/files/123/key
+X-Wolfronix-Key: <api-key>
+X-Client-ID: client-uuid
+X-User-ID: user-uuid
 ```
 
-**Response:**
+**Step 1 Response:**
+```json
+{
+  "file_id": "123",
+  "key_part_a": "<RSA-OAEP encrypted 16-byte key half, base64>",
+  "message": "Decrypt key_part_a locally with your private key..."
+}
+```
+
+**Step 2 — Client-Side (SDK does this automatically):**
+```typescript
+// SDK internally does:
+const decryptedKeyA = await rsaDecryptBase64(keyResponse.key_part_a, this.privateKey);
+// privateKey is a CryptoKey in browser memory — never serialized or sent
+```
+
+**Step 3 — Decrypt with key half:**
+```http
+POST /api/v1/files/123/decrypt
+X-Wolfronix-Key: <api-key>
+X-Client-ID: client-uuid
+Content-Type: application/json
+
+{
+  "decrypted_key_a": "<base64-encoded 16-byte cleartext key half>",
+  "user_role": "owner"
+}
+```
+
+**Step 3 Response:**
 ```
 Content-Type: application/octet-stream
 Content-Disposition: attachment; filename="document.pdf"
+X-Masking-Applied: owner
 
-<binary file data>
+<binary file data — RBAC-masked if text>
 ```
 
-**What Happens:**
-1. Validate JWT, extract user_id
-2. Check storage mode (enterprise or self-hosted)
-3. Fetch encrypted data from appropriate source
-4. Verify file ownership (user_id match)
-5. **Layer 4** - Reassemble chunks if needed
-6. **Layer 2** - Unwrap user's encryption key
-7. **Layer 3** - Decrypt with AES-256-GCM
-8. Record decryption metrics
-9. Stream decrypted file to client
+**What Happens (server-side on Step 3):**
+1. Base64-decode `decrypted_key_a` → 16-byte keyA (client's half)
+2. RSA-OAEP decrypt `key_part_b` with Server Private Key → 16-byte keyB (server's half)
+3. **Layer 4** — Reconstruct full 32-byte AES key: `fullKey = keyA || keyB`
+4. Fetch encrypted data from Client API via `clientDBConn`
+5. **Layer 3** — AES-256-GCM authenticated decryption (extract nonce, decrypt, verify tag)
+6. **Layer 2** — Apply RBAC dynamic masking on text files based on `user_role`
+7. Record decryption metrics
+8. Stream decrypted (and masked) file to client
+
+> **Security Guarantee:** The client's RSA private key never touches the network. Only a 16-byte
+> symmetric key half (which is useless without the server's 16-byte half) is transmitted over TLS.
+> Neither party alone can decrypt the data — both halves are required.
 
 ---
 

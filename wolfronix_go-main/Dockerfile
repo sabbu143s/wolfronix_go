@@ -1,9 +1,6 @@
 # --- Stage 1: Builder ---
 FROM golang:1.22-alpine AS builder
 
-# Install C-compiler (Required for SQLite)
-RUN apk add --no-cache gcc musl-dev
-
 WORKDIR /app
 
 # Copy dependency files first (Caching layer)
@@ -13,8 +10,9 @@ RUN go mod download
 # Copy Source Code
 COPY . .
 
-# Build the Binary (CGO enabled for SQLite)
-RUN CGO_ENABLED=1 GOOS=linux go build -o wolfronix-engine cmd/api/main.go
+# Build the Binary (CGO disabled - pure Go, no SQLite dependency)
+# Uses ./cmd/api/ to include all Go files (main.go + messaging.go)
+RUN CGO_ENABLED=0 GOOS=linux go build -o wolfronix-engine ./cmd/api/
 
 # --- Stage 2: Runtime ---
 FROM alpine:latest

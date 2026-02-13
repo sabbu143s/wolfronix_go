@@ -69,6 +69,7 @@ export async function register(req, res) {
         });
     } catch (error) {
         console.error("Register error:", error);
+        res.status(500).json({ message: "Registration failed" });
     }
 }
 
@@ -166,11 +167,12 @@ export async function verifyMfa(req, res) {
 }
 
 export async function googleCallback(req, res) {
+    const frontendURL = process.env.FRONTEND_URL || 'http://localhost:5500';
     try {
         const user = req.user;
 
         if (!user) {
-            return res.redirect('http://localhost:5500/frontend/login.html?error=auth_failed');
+            return res.redirect(`${frontendURL}/frontend/login.html?error=auth_failed`);
         }
 
         const token = jwt.sign(
@@ -180,9 +182,9 @@ export async function googleCallback(req, res) {
         );
 
         // Redirect to frontend with token
-        res.redirect(`http://localhost:5500/frontend/auth-callback.html?token=${token}`);
+        res.redirect(`${frontendURL}/frontend/auth-callback.html?token=${token}`);
     } catch (error) {
         console.error("Google callback error:", error);
-        res.redirect('http://localhost:5500/frontend/login.html?error=server_error');
+        res.redirect(`${frontendURL}/frontend/login.html?error=server_error`);
     }
 }

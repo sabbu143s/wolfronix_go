@@ -28,6 +28,7 @@ type MetricsStore struct {
 	cache   map[string]*ClientMetrics
 	mu      sync.RWMutex
 	flushCh chan string
+	done    chan struct{}
 }
 
 // NewMetricsStore creates a new metrics store
@@ -36,6 +37,7 @@ func NewMetricsStore(db *sql.DB) (*MetricsStore, error) {
 		db:      db,
 		cache:   make(map[string]*ClientMetrics),
 		flushCh: make(chan string, 100),
+		done:    make(chan struct{}),
 	}
 
 	// Initialize database table
@@ -481,6 +483,12 @@ func (s *MetricsStore) flushWorker() {
 
 	for {
 		select {
+		case <-s.done:
+			// Flush remaining before exit
+			for clientID := range pendingFlush {
+				s.flushToDB(clientID)
+			}
+			return
 		case clientID := <-s.flushCh:
 			pendingFlush[clientID] = true
 
@@ -528,8 +536,10 @@ func (s *MetricsStore) flushToDB(clientID string) {
 	)
 }
 
-// Close flushes all pending metrics and closes the store
+// Close flushes all pending metrics and shuts down the flush worker
 func (s *MetricsStore) Close() {
+	close(s.done) // Signal flushWorker to stop
+
 	s.mu.RLock()
 	clients := make([]string, 0, len(s.cache))
 	for clientID := range s.cache {

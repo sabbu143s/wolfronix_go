@@ -3,7 +3,7 @@
  * Zero-knowledge encryption made simple
  * 
  * @package @wolfronix/sdk
- * @version 1.3.0
+ * @version 3.0.0
  */
 
 import {
@@ -17,6 +17,7 @@ import {
   decryptData,
   rsaEncrypt,
   rsaDecrypt,
+  rsaDecryptBase64,
   exportSessionKey,
   importSessionKey
 } from './crypto';
@@ -30,6 +31,8 @@ export interface WolfronixConfig {
   baseUrl: string;
   /** Your enterprise client ID (optional for self-hosted) */
   clientId?: string;
+  /** API key for authentication (X-Wolfronix-Key header) */
+  wolfronixKey?: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
   /** Retry failed requests (default: 3) */
@@ -70,6 +73,12 @@ export interface DeleteResponse {
   message: string;
 }
 
+export interface KeyPartResponse {
+  file_id: string;
+  key_part_a: string;
+  message: string;
+}
+
 export interface MetricsResponse {
   success: boolean;
   total_encryptions: number;
@@ -82,6 +91,58 @@ export interface EncryptMessagePacket {
   key: string; // Encrypted AES session key (RSA encrypted)
   iv: string;  // AES-GCM IV
   msg: string; // Encrypted message text (AES encrypted)
+}
+
+// --- Server-Side Message Encryption Types ---
+
+export interface ServerEncryptResult {
+  /** Base64-encoded ciphertext */
+  encrypted_message: string;
+  /** Base64-encoded nonce */
+  nonce: string;
+  /** Base64-encoded client key half (Layer 4) or full key (Layer 3) */
+  key_part_a: string;
+  /** Tag for server's key_part_b lookup (Layer 4 only, empty for Layer 3) */
+  message_tag: string;
+  /** Unix timestamp */
+  timestamp: number;
+}
+
+export interface ServerDecryptParams {
+  /** Base64-encoded ciphertext (from ServerEncryptResult) */
+  encryptedMessage: string;
+  /** Base64-encoded nonce */
+  nonce: string;
+  /** Base64-encoded key_part_a */
+  keyPartA: string;
+  /** Message tag for Layer 4 (omit for Layer 3) */
+  messageTag?: string;
+}
+
+export interface ServerBatchEncryptResult {
+  results: Array<{
+    id: string;
+    encrypted_message: string;
+    nonce: string;
+    seq: number;
+  }>;
+  /** Shared key_part_a for the batch */
+  key_part_a: string;
+  /** Shared batch tag for key_part_b lookup (Layer 4) */
+  batch_tag: string;
+  timestamp: number;
+}
+
+export interface StreamSession {
+  /** Client's key half (encrypt direction only) */
+  keyPartA?: string;
+  /** Stream tag for the session */
+  streamTag?: string;
+}
+
+export interface StreamChunk {
+  data: string;  // base64
+  seq: number;
 }
 
 
@@ -154,6 +215,11 @@ export class Wolfronix {
   private privateKey: CryptoKey | null = null;
   private publicKeyPEM: string | null = null;
 
+  /** Expose private key status for testing */
+  hasPrivateKey(): boolean {
+    return this.privateKey !== null;
+  }
+
   /**
    * Create a new Wolfronix client
    * 
@@ -171,6 +237,7 @@ export class Wolfronix {
       this.config = {
         baseUrl: config,
         clientId: '',
+        wolfronixKey: '',
         timeout: 30000,
         retries: 3,
         insecure: false
@@ -179,6 +246,7 @@ export class Wolfronix {
       this.config = {
         baseUrl: config.baseUrl,
         clientId: config.clientId || '',
+        wolfronixKey: config.wolfronixKey || '',
         timeout: config.timeout || 30000,
         retries: config.retries || 3,
         insecure: config.insecure || false
@@ -200,6 +268,11 @@ export class Wolfronix {
 
     if (this.config.clientId) {
       headers['X-Client-ID'] = this.config.clientId;
+    }
+
+    // API key authentication (required by server middleware)
+    if (this.config.wolfronixKey) {
+      headers['X-Wolfronix-Key'] = this.config.wolfronixKey;
     }
 
     if (includeAuth && this.token) {
@@ -243,6 +316,20 @@ export class Wolfronix {
           headers,
           signal: controller.signal,
         };
+
+        // Support self-signed certs in Node.js (insecure mode)
+        // Node.js 18+ supports the `dispatcher` option via undici
+        if (this.config.insecure && typeof process !== 'undefined') {
+          try {
+            // @ts-ignore – Node.js specific: undici Agent with rejectUnauthorized
+            const { Agent } = await import('undici');
+            (fetchOptions as any).dispatcher = new Agent({
+              connect: { rejectUnauthorized: false }
+            });
+          } catch {
+            // undici not available; user should set NODE_TLS_REJECT_UNAUTHORIZED=0
+          }
+        }
 
         if (formData) {
           fetchOptions.body = formData;
@@ -359,10 +446,7 @@ export class Wolfronix {
       this.publicKey = keyPair.publicKey;
       this.privateKey = keyPair.privateKey;
       this.publicKeyPEM = publicKeyPEM;
-
-      // Note: This endpoint doesn't return a token in the new flow, 
-      // but we set success state. In a real app, you might auto-login or require login.
-      this.token = "session_" + Date.now(); // Mock token for compatibility
+      this.token = 'zk-session'; // Local session marker (auth via X-Wolfronix-Key header)
     }
 
     return response;
@@ -408,7 +492,7 @@ export class Wolfronix {
       this.publicKey = await importKeyFromPEM(response.public_key_pem, 'public');
 
       this.userId = email;
-      this.token = "session_" + Date.now(); // Mock token
+      this.token = 'zk-session'; // Local session marker (auth via X-Wolfronix-Key header)
 
       return {
         success: true,
@@ -526,7 +610,14 @@ export class Wolfronix {
 
 
   /**
-   * Decrypt and retrieve a file
+   * Decrypt and retrieve a file using zero-knowledge flow.
+   * 
+   * Flow:
+   * 1. GET /api/v1/files/{id}/key → encrypted key_part_a
+   * 2. Decrypt key_part_a client-side with private key (RSA-OAEP)
+   * 3. POST /api/v1/files/{id}/decrypt with { decrypted_key_a } in body
+   * 
+   * The private key NEVER leaves the client.
    * 
    * @example
    * ```typescript
@@ -539,7 +630,7 @@ export class Wolfronix {
    * fs.writeFileSync('decrypted.pdf', buffer);
    * ```
    */
-  async decrypt(fileId: string): Promise<Blob> {
+  async decrypt(fileId: string, role: string = 'owner'): Promise<Blob> {
     this.ensureAuthenticated();
 
     if (!fileId) {
@@ -550,21 +641,26 @@ export class Wolfronix {
       throw new Error("Private key not available. Is user logged in?");
     }
 
-    const privateKeyPEM = await exportKeyToPEM(this.privateKey, 'private');
+    // Step 1: Fetch encrypted key_part_a from server
+    const keyResponse = await this.getFileKey(fileId);
 
+    // Step 2: Decrypt key_part_a client-side with our private key (RSA-OAEP)
+    const decryptedKeyA = await rsaDecryptBase64(keyResponse.key_part_a, this.privateKey);
+
+    // Step 3: Send decrypted_key_a to server (private key never leaves client)
     return this.request<Blob>('POST', `/api/v1/files/${fileId}/decrypt`, {
       responseType: 'blob',
-      headers: {
-        'X-Private-Key': privateKeyPEM,
-        'X-User-Role': 'owner'
+      body: {
+        decrypted_key_a: decryptedKeyA,
+        user_role: role
       }
     });
   }
 
   /**
-   * Decrypt and return as ArrayBuffer
+   * Decrypt and return as ArrayBuffer (zero-knowledge flow)
    */
-  async decryptToBuffer(fileId: string): Promise<ArrayBuffer> {
+  async decryptToBuffer(fileId: string, role: string = 'owner'): Promise<ArrayBuffer> {
     this.ensureAuthenticated();
 
     if (!fileId) {
@@ -574,15 +670,37 @@ export class Wolfronix {
     if (!this.privateKey) {
       throw new Error("Private key not available. Is user logged in?");
     }
-    const privateKeyPEM = await exportKeyToPEM(this.privateKey, 'private');
 
+    // Step 1: Fetch encrypted key_part_a from server
+    const keyResponse = await this.getFileKey(fileId);
+
+    // Step 2: Decrypt key_part_a client-side (RSA-OAEP)
+    const decryptedKeyA = await rsaDecryptBase64(keyResponse.key_part_a, this.privateKey);
+
+    // Step 3: Send decrypted_key_a to server
     return this.request<ArrayBuffer>('POST', `/api/v1/files/${fileId}/decrypt`, {
       responseType: 'arraybuffer',
-      headers: {
-        'X-Private-Key': privateKeyPEM,
-        'X-User-Role': 'owner'
+      body: {
+        decrypted_key_a: decryptedKeyA,
+        user_role: role
       }
     });
+  }
+
+  /**
+   * Fetch the encrypted key_part_a for a file (for client-side decryption)
+   * 
+   * @param fileId The file ID to get the key for
+   * @returns KeyPartResponse containing the RSA-OAEP encrypted key_part_a
+   */
+  async getFileKey(fileId: string): Promise<KeyPartResponse> {
+    this.ensureAuthenticated();
+
+    if (!fileId) {
+      throw new ValidationError('File ID is required');
+    }
+
+    return this.request<KeyPartResponse>('GET', `/api/v1/files/${fileId}/key`);
   }
 
 
@@ -635,11 +753,18 @@ export class Wolfronix {
   /**
    * Get another user's public key (for E2E encryption)
    * @param userId The ID of the recipient
+   * @param clientId Optional: override the configured clientId
    */
-  async getPublicKey(userId: string): Promise<string> {
+  async getPublicKey(userId: string, clientId?: string): Promise<string> {
     this.ensureAuthenticated();
-    const result = await this.request<{ user_id: string, public_key: string }>('GET', `/api/v1/keys/${userId}`);
-    return result.public_key;
+    const cid = clientId || this.config.clientId;
+    if (!cid) {
+      throw new ValidationError('clientId is required for getPublicKey(). Set it in config or pass as second argument.');
+    }
+    const result = await this.request<{ client_id: string, user_id: string, public_key_pem: string }>(
+      'GET', `/api/v1/keys/public/${encodeURIComponent(cid)}/${encodeURIComponent(userId)}`
+    );
+    return result.public_key_pem;
   }
 
   /**
@@ -716,6 +841,189 @@ export class Wolfronix {
   }
 
   // ==========================================================================
+  // Server-Side Message Encryption (Dual-Key Split)
+  // ==========================================================================
+
+  /**
+   * Encrypt a text message via the Wolfronix server (dual-key split).
+   * The server generates an AES key, encrypts the message, and splits the key —
+   * you get key_part_a, the server holds key_part_b.
+   * 
+   * Use this for server-managed message encryption (e.g., stored encrypted messages).
+   * For true E2E (where the server never sees plaintext), use encryptMessage() instead.
+   * 
+   * @param message The plaintext message to encrypt
+   * @param options.layer 3 = AES only (full key returned), 4 = dual-key split (default)
+   * 
+   * @example
+   * ```typescript
+   * const result = await wfx.serverEncrypt('Hello, World!');
+   * // Store result.encrypted_message, result.nonce, result.key_part_a, result.message_tag
+   * ```
+   */
+  async serverEncrypt(message: string, options?: { layer?: number }): Promise<ServerEncryptResult> {
+    this.ensureAuthenticated();
+
+    if (!message) {
+      throw new ValidationError('Message is required');
+    }
+
+    return this.request<ServerEncryptResult>('POST', '/api/v1/messages/encrypt', {
+      body: {
+        message,
+        user_id: this.userId,
+        layer: options?.layer || 4,
+      }
+    });
+  }
+
+  /**
+   * Decrypt a message previously encrypted via serverEncrypt().
+   * 
+   * @param params The encrypted message data (from serverEncrypt result)
+   * @returns The decrypted plaintext message
+   * 
+   * @example
+   * ```typescript
+   * const text = await wfx.serverDecrypt({
+   *   encryptedMessage: result.encrypted_message,
+   *   nonce: result.nonce,
+   *   keyPartA: result.key_part_a,
+   *   messageTag: result.message_tag,
+   * });
+   * ```
+   */
+  async serverDecrypt(params: ServerDecryptParams): Promise<string> {
+    this.ensureAuthenticated();
+
+    if (!params.encryptedMessage || !params.nonce || !params.keyPartA) {
+      throw new ValidationError('encryptedMessage, nonce, and keyPartA are required');
+    }
+
+    const response = await this.request<{ message: string; timestamp: number }>(
+      'POST', '/api/v1/messages/decrypt', {
+      body: {
+        encrypted_message: params.encryptedMessage,
+        nonce: params.nonce,
+        key_part_a: params.keyPartA,
+        message_tag: params.messageTag || '',
+        user_id: this.userId,
+      }
+    });
+
+    return response.message;
+  }
+
+  /**
+   * Encrypt multiple messages in a single round-trip (batch).
+   * All messages share one AES key (different nonce per message).
+   * Efficient for chat history encryption or bulk operations.
+   * 
+   * @param messages Array of { id, message } objects (max 100)
+   * @param options.layer 3 or 4 (default: 4)
+   * 
+   * @example
+   * ```typescript
+   * const result = await wfx.serverEncryptBatch([
+   *   { id: 'msg1', message: 'Hello' },
+   *   { id: 'msg2', message: 'World' },
+   * ]);
+   * // result.results[0].encrypted_message, result.key_part_a, result.batch_tag
+   * ```
+   */
+  async serverEncryptBatch(
+    messages: Array<{ id: string; message: string }>,
+    options?: { layer?: number }
+  ): Promise<ServerBatchEncryptResult> {
+    this.ensureAuthenticated();
+
+    if (!messages || messages.length === 0) {
+      throw new ValidationError('At least one message is required');
+    }
+    if (messages.length > 100) {
+      throw new ValidationError('Maximum 100 messages per batch');
+    }
+
+    return this.request<ServerBatchEncryptResult>('POST', '/api/v1/messages/batch/encrypt', {
+      body: {
+        messages,
+        user_id: this.userId,
+        layer: options?.layer || 4,
+      }
+    });
+  }
+
+  /**
+   * Decrypt a single message from a batch result.
+   * Uses the shared key_part_a and batch_tag from the batch result.
+   * 
+   * @param batchResult The batch encrypt result
+   * @param index The index of the message to decrypt
+   */
+  async serverDecryptBatchItem(
+    batchResult: ServerBatchEncryptResult,
+    index: number
+  ): Promise<string> {
+    if (index < 0 || index >= batchResult.results.length) {
+      throw new ValidationError('Invalid batch index');
+    }
+
+    const item = batchResult.results[index];
+    return this.serverDecrypt({
+      encryptedMessage: item.encrypted_message,
+      nonce: item.nonce,
+      keyPartA: batchResult.key_part_a,
+      messageTag: batchResult.batch_tag,
+    });
+  }
+
+  // ==========================================================================
+  // Real-Time Streaming Encryption (WebSocket)
+  // ==========================================================================
+
+  /**
+   * Create a streaming encryption/decryption session over WebSocket.
+   * Data flows in real-time: send chunks, receive encrypted/decrypted chunks back.
+   * 
+   * @param direction 'encrypt' for plaintext→ciphertext, 'decrypt' for reverse
+   * @param streamKey Required for decrypt — the key_part_a and stream_tag from the encrypt session
+   * 
+   * @example
+   * ```typescript
+   * // Encrypt stream
+   * const stream = await wfx.createStream('encrypt');
+   * stream.onData((chunk, seq) => console.log('Encrypted chunk', seq));
+   * stream.send('Hello chunk 1');
+   * stream.send('Hello chunk 2');
+   * const summary = await stream.end();
+   * // Save stream.keyPartA and stream.streamTag for decryption
+   * 
+   * // Decrypt stream
+   * const dStream = await wfx.createStream('decrypt', {
+   *   keyPartA: stream.keyPartA!,
+   *   streamTag: stream.streamTag!,
+   * });
+   * dStream.onData((chunk, seq) => console.log('Decrypted:', chunk));
+   * dStream.send(encryptedChunk1);
+   * await dStream.end();
+   * ```
+   */
+  async createStream(
+    direction: 'encrypt' | 'decrypt',
+    streamKey?: { keyPartA: string; streamTag: string }
+  ): Promise<WolfronixStream> {
+    this.ensureAuthenticated();
+
+    if (direction === 'decrypt' && !streamKey) {
+      throw new ValidationError('streamKey (keyPartA + streamTag) is required for decrypt streams');
+    }
+
+    const stream = new WolfronixStream(this.config, this.userId!);
+    await stream.connect(direction, streamKey);
+    return stream;
+  }
+
+  // ==========================================================================
   // Metrics & Status
   // ==========================================================================
 
@@ -745,6 +1053,243 @@ export class Wolfronix {
     } catch {
       return false;
     }
+  }
+}
+
+// ============================================================================
+// WolfronixStream — Real-Time Streaming Encryption over WebSocket
+// ============================================================================
+
+type StreamDataCallback = (data: string, seq: number) => void;
+type StreamErrorCallback = (error: Error) => void;
+
+/**
+ * Real-time streaming encryption/decryption over WebSocket.
+ * Each chunk is individually encrypted with AES-256-GCM using counter-based nonces.
+ * 
+ * @example
+ * ```typescript
+ * const stream = await wfx.createStream('encrypt');
+ * stream.onData((chunk, seq) => sendToRecipient(chunk));
+ * stream.onError((err) => console.error(err));
+ * await stream.send('audio chunk data...');
+ * const summary = await stream.end();
+ * ```
+ */
+export class WolfronixStream {
+  private ws: WebSocket | null = null;
+  private dataCallbacks: StreamDataCallback[] = [];
+  private errorCallbacks: StreamErrorCallback[] = [];
+  private pendingChunks: Map<number, { resolve: (data: string) => void; reject: (err: Error) => void }> = new Map();
+  private seqCounter = 0;
+
+  /** Client's key half (available after encrypt stream init) */
+  public keyPartA: string | null = null;
+  /** Stream tag (available after encrypt stream init) */
+  public streamTag: string | null = null;
+
+  /** @internal */
+  constructor(
+    private readonly config: Required<WolfronixConfig>,
+    private readonly userId: string
+  ) { }
+
+  /** @internal Connect and initialize the stream session */
+  async connect(
+    direction: 'encrypt' | 'decrypt',
+    streamKey?: { keyPartA: string; streamTag: string }
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Build WebSocket URL with query-param auth (browsers can't set custom WS headers)
+      const wsBase = this.config.baseUrl.replace(/^http/, 'ws');
+      const params = new URLSearchParams();
+      if (this.config.wolfronixKey) {
+        params.set('wolfronix_key', this.config.wolfronixKey);
+      }
+      if (this.config.clientId) {
+        params.set('client_id', this.config.clientId);
+      }
+      const wsUrl = `${wsBase}/api/v1/stream?${params.toString()}`;
+
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.onopen = () => {
+        // Send init message
+        const initMsg: Record<string, string> = { type: 'init', direction };
+        if (direction === 'decrypt' && streamKey) {
+          initMsg.key_part_a = streamKey.keyPartA;
+          initMsg.stream_tag = streamKey.streamTag;
+        }
+        this.ws!.send(JSON.stringify(initMsg));
+      };
+
+      let initResolved = false;
+
+      this.ws.onmessage = (event: MessageEvent) => {
+        try {
+          const msg = JSON.parse(event.data as string);
+
+          if (msg.type === 'error') {
+            const err = new Error(msg.error);
+            if (!initResolved) {
+              initResolved = true;
+              reject(err);
+            }
+            this.errorCallbacks.forEach(cb => cb(err));
+            return;
+          }
+
+          if (msg.type === 'init_ack' && !initResolved) {
+            initResolved = true;
+            if (msg.key_part_a) this.keyPartA = msg.key_part_a;
+            if (msg.stream_tag) this.streamTag = msg.stream_tag;
+            resolve();
+            return;
+          }
+
+          if (msg.type === 'data') {
+            // Notify all data callbacks
+            this.dataCallbacks.forEach(cb => cb(msg.data, msg.seq));
+            // Resolve pending promise for this sequence
+            const pending = this.pendingChunks.get(msg.seq);
+            if (pending) {
+              pending.resolve(msg.data);
+              this.pendingChunks.delete(msg.seq);
+            }
+            return;
+          }
+
+          if (msg.type === 'end_ack') {
+            // Handled by end() promise
+            return;
+          }
+        } catch (e) {
+          const err = new Error('Failed to parse stream message');
+          this.errorCallbacks.forEach(cb => cb(err));
+        }
+      };
+
+      this.ws.onerror = (event) => {
+        const err = new Error('WebSocket error');
+        if (!initResolved) {
+          initResolved = true;
+          reject(err);
+        }
+        this.errorCallbacks.forEach(cb => cb(err));
+      };
+
+      this.ws.onclose = () => {
+        // Reject all pending chunks
+        this.pendingChunks.forEach(p => p.reject(new Error('Stream closed')));
+        this.pendingChunks.clear();
+      };
+    });
+  }
+
+  /**
+   * Send a data chunk for encryption/decryption.
+   * Returns a promise that resolves with the processed (encrypted/decrypted) chunk.
+   * 
+   * @param data String or base64-encoded binary data
+   * @returns The processed chunk (base64-encoded)
+   */
+  async send(data: string): Promise<string> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('Stream not connected');
+    }
+
+    // If data is plain text, base64-encode it
+    const b64Data = this.isBase64(data) ? data : btoa(data);
+    const seq = this.seqCounter++;
+
+    return new Promise<string>((resolve, reject) => {
+      this.pendingChunks.set(seq, { resolve, reject });
+      this.ws!.send(JSON.stringify({ type: 'data', data: b64Data }));
+    });
+  }
+
+  /**
+   * Send raw binary data for encryption/decryption.
+   * 
+   * @param buffer ArrayBuffer or Uint8Array
+   * @returns The processed chunk (base64-encoded)
+   */
+  async sendBinary(buffer: ArrayBuffer | Uint8Array): Promise<string> {
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const b64 = btoa(binary);
+    return this.send(b64);
+  }
+
+  /**
+   * Register a callback for incoming data chunks.
+   * 
+   * @param callback Called with (base64Data, sequenceNumber) for each chunk
+   */
+  onData(callback: StreamDataCallback): void {
+    this.dataCallbacks.push(callback);
+  }
+
+  /**
+   * Register a callback for stream errors.
+   */
+  onError(callback: StreamErrorCallback): void {
+    this.errorCallbacks.push(callback);
+  }
+
+  /**
+   * End the stream session. Returns the total number of chunks processed.
+   */
+  async end(): Promise<{ chunksProcessed: number }> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return { chunksProcessed: this.seqCounter };
+    }
+
+    return new Promise((resolve) => {
+      const originalHandler = this.ws!.onmessage;
+      this.ws!.onmessage = (event: MessageEvent) => {
+        try {
+          const msg = JSON.parse(event.data as string);
+          if (msg.type === 'end_ack') {
+            resolve({ chunksProcessed: msg.chunks_processed || this.seqCounter });
+            this.ws!.close();
+            return;
+          }
+        } catch { /* ignore */ }
+        // Forward other messages
+        if (originalHandler && this.ws) originalHandler.call(this.ws, event);
+      };
+
+      this.ws!.send(JSON.stringify({ type: 'end' }));
+
+      // Timeout fallback
+      setTimeout(() => {
+        resolve({ chunksProcessed: this.seqCounter });
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.close();
+        }
+      }, 5000);
+    });
+  }
+
+  /**
+   * Close the stream immediately without sending an end message.
+   */
+  close(): void {
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.pendingChunks.forEach(p => p.reject(new Error('Stream closed')));
+    this.pendingChunks.clear();
+  }
+
+  private isBase64(str: string): boolean {
+    if (str.length % 4 !== 0) return false;
+    return /^[A-Za-z0-9+/]*={0,2}$/.test(str);
   }
 }
 

@@ -41,12 +41,20 @@ services:
       - DB_HOST=wolfronix_db
       - DB_PORT=5432
       - DB_USER=wolfuser
-      - DB_PASS=${DB_PASSWORD:-wolfpass123}
+      - DB_PASS=${DB_PASSWORD:?Set DB_PASSWORD env var}
       - DB_NAME=wolfronix
       - WOLFRONIX_ENV=production
       - GOMEMLIMIT=24GiB
-      - JWT_SECRET=${JWT_SECRET:-change-this-in-production}
-      - MASTER_KEY=${MASTER_KEY:-change-this-in-production}
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET env var}
+      - MASTER_KEY=${MASTER_KEY:?Set MASTER_KEY env var}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:?Set ADMIN_API_KEY env var}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
+      # Enterprise Client DB (optional — only if using enterprise mode)
+      - CLIENT_DB_API_ENDPOINT=${CLIENT_DB_API_ENDPOINT:-}
+      - CLIENT_DB_API_KEY=${CLIENT_DB_API_KEY:-}
+      - CLIENT_DB_TYPE=${CLIENT_DB_TYPE:-custom_api}
+      - CLIENT_DB_TIMEOUT=${CLIENT_DB_TIMEOUT:-30s}
+      - CLIENT_DB_RETRY_COUNT=${CLIENT_DB_RETRY_COUNT:-3}
     volumes:
       - wolfronix_data:/root/data
       - ./ssl:/root/ssl:ro
@@ -72,7 +80,7 @@ services:
     container_name: wolfronix_db
     environment:
       - POSTGRES_USER=wolfuser
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-wolfpass123}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD env var}
       - POSTGRES_DB=wolfronix
     volumes:
       - postgres_data:/var/lib/postgresql/data

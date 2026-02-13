@@ -89,20 +89,20 @@ export const getMyDashboardMetrics = async (req, res) => {
             distributionChanged = true;
         }
 
-        // Crypto Metrics Auto-Heal
+        // Crypto Metrics Auto-Heal (initialize to zero if missing)
         if ((metrics.encryptionCount || 0) === 0) {
-            metrics.encryptionCount = 842391; // Default starting value
-            metrics.avgEncryptionTimeMs = 14;
+            metrics.encryptionCount = 0;
+            metrics.avgEncryptionTimeMs = 0;
             updated = true;
-            updateData.encryptionCount = 842391;
-            updateData.avgEncryptionTimeMs = 14;
+            updateData.encryptionCount = 0;
+            updateData.avgEncryptionTimeMs = 0;
         }
         if ((metrics.decryptionCount || 0) === 0) {
-            metrics.decryptionCount = 592104; // Default starting value
-            metrics.avgDecryptionTimeMs = 9;
+            metrics.decryptionCount = 0;
+            metrics.avgDecryptionTimeMs = 0;
             updated = true;
-            updateData.decryptionCount = 592104;
-            updateData.avgDecryptionTimeMs = 9;
+            updateData.decryptionCount = 0;
+            updateData.avgDecryptionTimeMs = 0;
         }
 
         if (distributionChanged || updated) {

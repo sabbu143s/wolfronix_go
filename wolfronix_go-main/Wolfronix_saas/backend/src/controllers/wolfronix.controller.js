@@ -123,6 +123,36 @@ export async function revokeApiKey(req, res) {
     try {
         const userId = req.userId;
         
+        // Get client ID before clearing it
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { wolfronixClientId: true }
+        });
+        
+        // Deactivate on Wolfronix engine first (best-effort)
+        if (user?.wolfronixClientId) {
+            try {
+                const engineUrl = process.env.WOLFRONIX_ENGINE_URL || 'http://localhost:8443';
+                const adminKey = process.env.WOLFRONIX_ADMIN_KEY;
+                const response = await fetch(
+                    `${engineUrl}/api/v1/enterprise/clients/${encodeURIComponent(user.wolfronixClientId)}`,
+                    {
+                        method: 'DELETE',
+                        headers: {
+                            'X-Admin-Key': adminKey,
+                            'Content-Type': 'application/json'
+                        }
+                    }
+                );
+                if (!response.ok) {
+                    console.warn(`Engine deactivation returned ${response.status} for client ${user.wolfronixClientId}`);
+                }
+            } catch (engineErr) {
+                console.error('Failed to deactivate on Wolfronix engine:', engineErr.message);
+                // Continue with local revocation even if engine call fails
+            }
+        }
+        
         await prisma.user.update({
             where: { id: userId },
             data: {
@@ -131,8 +161,6 @@ export async function revokeApiKey(req, res) {
                 apiKeyCreatedAt: null
             }
         });
-        
-        // TODO: Also revoke from Wolfronix engine
         
         res.json({
             success: true,

@@ -9,6 +9,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -227,9 +228,9 @@ func (c *ClientDBConnector) GetFileData(config *ClientConfig, fileID int64, user
 // ListFiles retrieves list of files for a user from client's DB
 // The client's API should implement: GET /wolfronix/files?user_id={userID}
 func (c *ClientDBConnector) ListFiles(config *ClientConfig, userID string) ([]StoredFile, error) {
-	url := fmt.Sprintf("%s/wolfronix/files?user_id=%s", config.APIEndpoint, userID)
+	listURL := fmt.Sprintf("%s/wolfronix/files?user_id=%s", config.APIEndpoint, url.QueryEscape(userID))
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", listURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -324,9 +325,9 @@ func (c *ClientDBConnector) StoreUserKey(config *ClientConfig, key *StoredKey) e
 // GetUserKey retrieves a user's wrapped key from client's DB
 // The client's API should implement: GET /wolfronix/keys/{userID}
 func (c *ClientDBConnector) GetUserKey(config *ClientConfig, userID string) (*StoredKey, error) {
-	url := fmt.Sprintf("%s/wolfronix/keys/%s", config.APIEndpoint, userID)
+	keyURL := fmt.Sprintf("%s/wolfronix/keys/%s", config.APIEndpoint, url.PathEscape(userID))
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", keyURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -359,9 +360,9 @@ func (c *ClientDBConnector) GetUserKey(config *ClientConfig, userID string) (*St
 // GetUserPublicKey retrieves only the public key for a user
 // The client's API should implement: GET /wolfronix/keys/{userID}/public
 func (c *ClientDBConnector) GetUserPublicKey(config *ClientConfig, userID string) (string, error) {
-	url := fmt.Sprintf("%s/wolfronix/keys/%s/public", config.APIEndpoint, userID)
+	pubKeyURL := fmt.Sprintf("%s/wolfronix/keys/%s/public", config.APIEndpoint, url.PathEscape(userID))
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", pubKeyURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

@@ -32,11 +32,26 @@ app.use(cors({
 }));
 
 // Session middleware for passport
+const sessionSecret = process.env.SESSION_SECRET;
+if (!sessionSecret) {
+    console.error('\u274c FATAL: SESSION_SECRET environment variable is required');
+    process.exit(1);
+}
+if (!process.env.JWT_SECRET) {
+    console.error('\u274c FATAL: JWT_SECRET environment variable is required');
+    process.exit(1);
+}
+
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'your_session_secret',
+    secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false } // Set to true if using HTTPS
+    cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
 }));
 
 // Initialize passport

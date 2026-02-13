@@ -1,15 +1,15 @@
 /**
  * Cryptographic utilities for client-side key management
- * Uses Web Crypto API (supported in modern browsers and Node.js 16+)
+ * Uses Web Crypto API (supported in modern browsers and Node.js 18+)
  */
 
-// Universal crypto access (works in both Browser and Node.js 16+)
+// Universal crypto access (works in both Browser and Node.js 18+)
 const getCrypto = (): Crypto => {
     if (typeof globalThis.crypto !== 'undefined') {
         return globalThis.crypto;
     }
     throw new Error(
-        'Web Crypto API not available. Requires a modern browser or Node.js 16+.'
+        'Web Crypto API not available. Requires a modern browser or Node.js 18+.'
     );
 };
 
@@ -256,6 +256,15 @@ export async function rsaDecrypt(encryptedBase64: string, privateKey: CryptoKey)
         data
     );
     return decrypted;
+}
+
+/**
+ * Decrypt RSA-OAEP ciphertext (base64) and return plaintext as base64
+ * Used for client-side decryption of key_part_a in the zero-knowledge decrypt flow
+ */
+export async function rsaDecryptBase64(encryptedBase64: string, privateKey: CryptoKey): Promise<string> {
+    const decrypted = await rsaDecrypt(encryptedBase64, privateKey);
+    return arrayBufferToBase64(decrypted);
 }
 
 /**

@@ -265,10 +265,3 @@ func (g *FakeDataGenerator) GenerateFakeBase64(originalLength int) string {
 
 	return base64.StdEncoding.EncodeToString(randomBytes)[:originalLength]
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

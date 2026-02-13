@@ -56,23 +56,30 @@ export const sendContactMessage = async (req, res) => {
         // Verify transporter configuration
         await transporter.verify();
 
+        // Sanitize user input to prevent HTML injection in email
+        const esc = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const safeName = esc(name);
+        const safeEmail = esc(email);
+        const safeCompany = esc(company || 'Not provided');
+        const safeMessage = esc(message).replace(/\n/g, '<br>');
+
         // Prepare email content
         const mailOptions = {
-            from: `"${name} (via wolfronix)" <${EMAIL_USER}>`,
-            replyTo: `"${name}" <${email}>`,
+            from: `"${safeName} (via wolfronix)" <${EMAIL_USER}>`,
+            replyTo: `"${safeName}" <${email}>`,
             to: COMPANY_EMAIL,
-            subject: `Contact Form Submission from ${name}`,
+            subject: `Contact Form Submission from ${safeName}`,
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                     <h2 style="color: #0066FF;">New Contact Form Submission</h2>
                     <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
                         <h3>Submission Details:</h3>
-                        <p><strong>Name:</strong> ${name}</p>
-                        <p><strong>Email:</strong> ${email}</p>
-                        <p><strong>Company:</strong> ${company || 'Not provided'}</p>
+                        <p><strong>Name:</strong> ${safeName}</p>
+                        <p><strong>Email:</strong> ${safeEmail}</p>
+                        <p><strong>Company:</strong> ${safeCompany}</p>
                         <p><strong>Message:</strong></p>
                         <div style="background-color: white; padding: 15px; border-radius: 4px; border-left: 4px solid #0066FF;">
-                            <p>${message.replace(/\n/g, '<br>')}</p>
+                            <p>${safeMessage}</p>
                         </div>
                     </div>
                     <p style="color: #666; font-size: 14px;">This email was sent from the Wolfronix contact form on ${new Date().toLocaleString()}</p>

@@ -1,13 +1,15 @@
 # Wolfronix Production Deployment Guide
 
+> **Engine v2** · SDK v2.3.0 · Last updated: February 2026
+
 ## Server Requirements
 
-| Component | Minimum | Recommended | Your Server |
-|-----------|---------|-------------|-------------|
-| RAM | 4 GB | 16 GB | 32 GB ✅ |
-| Storage | 50 GB | 500 GB | 3 TB ✅ |
-| CPU | 2 cores | 4+ cores | Check |
-| OS | Ubuntu 20.04+ | Ubuntu 22.04 | - |
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| RAM | 4 GB | 16+ GB |
+| Storage | 50 GB | 500+ GB |
+| CPU | 2 cores | 4+ cores |
+| OS | Ubuntu 20.04+ | Ubuntu 22.04 LTS |
 
 ---
 
@@ -16,20 +18,14 @@
 ### 1. Prepare Your Server
 
 ```bash
-# Install Ubuntu 22.04 LTS on your physical server
-# Connect via SSH or directly
-
-# Update system
+# Ubuntu 22.04 LTS
 sudo apt update && sudo apt upgrade -y
-
-# Install Git
 sudo apt install git -y
 ```
 
 ### 2. Download Wolfronix
 
 ```bash
-# Clone repository
 cd /opt
 sudo git clone https://github.com/YOUR_REPO/wolfronix_go.git wolfronix
 cd wolfronix/deploy
@@ -37,7 +33,7 @@ cd wolfronix/deploy
 
 Or copy from your local machine:
 ```bash
-# From your Windows machine (PowerShell)
+# From Windows (PowerShell)
 scp -r E:\Projects_office\Wolfronix_up_to_500\wolfronix_go-main\wolfronix_go-main user@YOUR_SERVER_IP:/opt/wolfronix
 ```
 
@@ -48,84 +44,112 @@ cd /opt/wolfronix/deploy
 chmod +x deploy.sh
 sudo ./deploy.sh your-domain.com
 
-# Or without a domain (uses IP address)
+# Or without a domain (uses localhost + self-signed cert)
 sudo ./deploy.sh
 ```
 
+The script will:
+- Install Docker if missing
+- Generate secure secrets (DB_PASSWORD, JWT_SECRET, MASTER_KEY, ADMIN_API_KEY)
+- Build the Wolfronix Docker image
+- Set up nginx with SSL (Let's Encrypt or self-signed)
+- Start all services
+- Configure firewall
+
 ### 4. Done!
 
-Your Wolfronix server is now running at:
-- `https://YOUR_SERVER_IP` (if no domain)
-- `https://your-domain.com` (if using domain)
+```
+https://YOUR_SERVER:9443/health          → Health check
+https://YOUR_SERVER:9443/api/v1/...      → API endpoints
+wss://YOUR_SERVER:9443/api/v1/stream     → WebSocket streaming
+```
+
+---
+
+## What Gets Deployed
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        INTERNET                              │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼ (Port 9443 HTTPS + WSS)
+┌─────────────────────────────────────────────────────────────┐
+│                    YOUR SERVER                                │
+│                                                               │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │  NGINX (Alpine) — Port 9443                           │   │
+│  │  • SSL termination (Let's Encrypt / self-signed)      │   │
+│  │  • Rate limiting (100 req/s burst 50)                 │   │
+│  │  • WebSocket proxy (Connection: Upgrade)              │   │
+│  │  • 500MB upload limit                                 │   │
+│  └───────────────────────┬───────────────────────────────┘   │
+│                          │ internal :5001                     │
+│  ┌───────────────────────▼───────────────────────────────┐   │
+│  │  WOLFRONIX ENGINE (Go 1.22)                           │   │
+│  │  • File encrypt/decrypt (4-layer)                     │   │
+│  │  • Message encrypt/decrypt (dual-key AES-GCM)         │   │
+│  │  • WebSocket streaming (real-time)                    │   │
+│  │  • Enterprise client management                       │   │
+│  │  • Zero-knowledge key storage                         │   │
+│  └────────┬──────────────────────────────┬───────────────┘   │
+│           │                              │                    │
+│  ┌────────▼────────┐           ┌─────────▼──────────┐        │
+│  │  PostgreSQL 15  │           │  Redis 7 (cache)   │        │
+│  │  (client_reg,   │           │  (optional)         │        │
+│  │   user_keys,    │           └────────────────────┘        │
+│  │   metrics)      │                                          │
+│  └─────────────────┘                                          │
+└───────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Detailed Setup
 
-### Step 1: Network Configuration
+### Network / Port Forwarding
 
 If your server is behind a router:
 
 ```bash
-# Check your server's local IP
-ip addr show
+ip addr show  # Get server's local IP
 
-# Configure port forwarding on your router:
-# External 80  → Internal YOUR_SERVER_IP:80
-# External 443 → Internal YOUR_SERVER_IP:443
+# Forward on your router:
+#   External 9080  → Internal YOUR_SERVER_IP:9080   (HTTP → HTTPS redirect)
+#   External 9443  → Internal YOUR_SERVER_IP:9443   (HTTPS + WSS)
 ```
 
-### Step 2: Domain Setup (Optional but Recommended)
+### Domain Setup (Optional but Recommended)
 
-1. Buy a domain from Namecheap, GoDaddy, Cloudflare, etc.
-2. Add DNS A record:
-   - Type: `A`
-   - Name: `api` (or `@` for root domain)
-   - Value: `YOUR_PUBLIC_IP`
-   - TTL: `Auto` or `3600`
+1. Buy a domain (Namecheap, Cloudflare, etc.)
+2. Add DNS A record: `api.wolfronix.com → YOUR_PUBLIC_IP`
+3. Wait 5-30 minutes for propagation
+4. Run: `sudo ./deploy.sh api.wolfronix.com`
 
-3. Wait for DNS propagation (5-30 minutes)
+### Configure Environment
 
-### Step 3: SSL Certificate
-
-The deployment script handles SSL automatically:
-
-| Scenario | SSL Type | Notes |
-|----------|----------|-------|
-| With domain | Let's Encrypt | Free, auto-renews |
-| Without domain | Self-signed | Works, but browsers show warning |
-
-For Let's Encrypt, ensure:
-- Domain points to your server
-- Ports 80 and 443 are open
-
-### Step 4: Configure Environment
-
-Edit `/opt/wolfronix/deploy/.env`:
+The deploy script auto-generates `.env`. To customize:
 
 ```bash
 sudo nano /opt/wolfronix/deploy/.env
 ```
 
-Important settings:
-```env
-# Change these!
-DB_PASSWORD=your-secure-password
-JWT_SECRET=your-64-char-secret
-MASTER_KEY=your-64-char-key
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DB_PASSWORD` | Yes | PostgreSQL password (auto-generated) |
+| `JWT_SECRET` | Yes | JWT signing key (auto-generated) |
+| `MASTER_KEY` | Yes | Master encryption key (auto-generated) |
+| `ADMIN_API_KEY` | Yes | Admin key for enterprise endpoints (auto-generated) |
+| `ALLOWED_ORIGINS` | No | CORS origins, comma-separated (default: your domain) |
+| `CLIENT_DB_API_ENDPOINT` | No | Client DB URL for enterprise mode |
+| `CLIENT_DB_API_KEY` | No | Client DB auth key |
+| `GOMEMLIMIT` | No | Go memory limit (default: 24GiB) |
+| `SSL_MODE` | No | `letsencrypt` or `selfsigned` |
+| `DOMAIN` | No | Your domain (default: localhost) |
 
-# Your domain
-DOMAIN=api.wolfronix.com
-
-# Memory (adjust based on your server)
-GOMEMLIMIT=24GiB
-```
-
-Generate secure secrets:
+Generate secrets manually:
 ```bash
-# Generate random secrets
-openssl rand -hex 32  # For JWT_SECRET
-openssl rand -hex 32  # For MASTER_KEY
+openssl rand -hex 32  # For JWT_SECRET, MASTER_KEY, ADMIN_API_KEY
 openssl rand -hex 16  # For DB_PASSWORD
 ```
 
@@ -134,10 +158,7 @@ openssl rand -hex 16  # For DB_PASSWORD
 ## Auto-Start on Boot
 
 ```bash
-# Copy service file
 sudo cp /opt/wolfronix/deploy/wolfronix.service /etc/systemd/system/
-
-# Enable auto-start
 sudo systemctl daemon-reload
 sudo systemctl enable wolfronix
 
@@ -156,21 +177,21 @@ sudo systemctl status wolfronix
 ```bash
 cd /opt/wolfronix/deploy
 
-# All logs
-docker-compose -f docker-compose.prod.yml logs -f
+# All services
+docker compose -f docker-compose.prod.yml logs -f
 
 # Specific service
-docker-compose -f docker-compose.prod.yml logs -f wolfronix
-docker-compose -f docker-compose.prod.yml logs -f nginx
-docker-compose -f docker-compose.prod.yml logs -f wolfronix_db
+docker compose -f docker-compose.prod.yml logs -f wolfronix
+docker compose -f docker-compose.prod.yml logs -f nginx
+docker compose -f docker-compose.prod.yml logs -f wolfronix_db
 ```
 
 ### Restart Services
 ```bash
-docker-compose -f docker-compose.prod.yml restart
+docker compose -f docker-compose.prod.yml restart
 
-# Or specific service
-docker-compose -f docker-compose.prod.yml restart wolfronix
+# Or just the engine
+docker compose -f docker-compose.prod.yml restart wolfronix
 ```
 
 ### Update Wolfronix
@@ -178,7 +199,7 @@ docker-compose -f docker-compose.prod.yml restart wolfronix
 cd /opt/wolfronix
 git pull origin main
 cd deploy
-docker-compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d --build wolfronix
 ```
 
 ### Backup Database
@@ -187,7 +208,16 @@ docker-compose -f docker-compose.prod.yml up -d --build
 docker exec wolfronix_db pg_dump -U wolfuser wolfronix > backup_$(date +%Y%m%d).sql
 
 # Restore
-cat backup_20260206.sql | docker exec -i wolfronix_db psql -U wolfuser wolfronix
+cat backup_20260212.sql | docker exec -i wolfronix_db psql -U wolfuser wolfronix
+```
+
+### Run E2E Tests
+```bash
+cd /opt/wolfronix/deploy
+chmod +x test_enterprise.sh
+./test_enterprise.sh https://localhost:9443 your-admin-api-key
+
+# Tests: health → register → keys → encrypt → messages → deactivate
 ```
 
 ### Check Resource Usage
@@ -201,39 +231,42 @@ docker stats
 
 ### UFW (Ubuntu)
 ```bash
-sudo ufw allow 22/tcp   # SSH
-sudo ufw allow 80/tcp   # HTTP
-sudo ufw allow 443/tcp  # HTTPS
+sudo ufw allow 22/tcp    # SSH
+sudo ufw allow 9080/tcp  # HTTP redirect
+sudo ufw allow 9443/tcp  # HTTPS + WSS
 sudo ufw enable
 sudo ufw status
 ```
 
 ### Firewalld (CentOS/RHEL)
 ```bash
+sudo firewall-cmd --permanent --add-port=9080/tcp
+sudo firewall-cmd --permanent --add-port=9443/tcp
 sudo firewall-cmd --permanent --add-service=ssh
-sudo firewall-cmd --permanent --add-service=http
-sudo firewall-cmd --permanent --add-service=https
 sudo firewall-cmd --reload
 ```
 
 ---
 
-## Monitoring
+## Endpoints Available After Deployment
 
-### Health Check
-```bash
-curl -k https://localhost/health
-```
-
-### API Status
-```bash
-curl -k https://localhost/api/v1/metrics
-```
-
-### Container Status
-```bash
-docker-compose -f docker-compose.prod.yml ps
-```
+| Category | Endpoint | Auth |
+|----------|----------|------|
+| **Health** | `GET /health` | None |
+| **Files** | `POST /api/v1/encrypt` | X-Wolfronix-Key |
+| | `GET /api/v1/files` | X-Wolfronix-Key |
+| | `GET /api/v1/files/{id}/key` | X-Wolfronix-Key |
+| | `POST /api/v1/files/{id}/decrypt` | X-Wolfronix-Key |
+| | `DELETE /api/v1/files/{id}` | X-Wolfronix-Key |
+| **Messages** | `POST /api/v1/messages/encrypt` | X-Wolfronix-Key |
+| | `POST /api/v1/messages/decrypt` | X-Wolfronix-Key |
+| | `POST /api/v1/messages/batch/encrypt` | X-Wolfronix-Key |
+| **Streaming** | `WSS /api/v1/stream` | `wolfronix_key` query param |
+| **Keys** | `POST /api/v1/keys/register` | X-Wolfronix-Key |
+| | `POST /api/v1/keys/login` | X-Wolfronix-Key |
+| **Enterprise** | `POST /api/v1/enterprise/register` | X-Admin-Key |
+| | `GET /api/v1/enterprise/clients` | X-Admin-Key |
+| | `DELETE /api/v1/enterprise/clients/{id}` | X-Admin-Key |
 
 ---
 
@@ -241,94 +274,65 @@ docker-compose -f docker-compose.prod.yml ps
 
 ### Container won't start
 ```bash
-# Check logs
-docker-compose -f docker-compose.prod.yml logs wolfronix
-
-# Check if port is in use
-sudo netstat -tlnp | grep -E '80|443'
+docker compose -f docker-compose.prod.yml logs wolfronix
+sudo netstat -tlnp | grep -E '9080|9443'
 ```
 
 ### Database connection error
 ```bash
-# Check database is running
-docker-compose -f docker-compose.prod.yml ps wolfronix_db
-
-# Check database logs
-docker-compose -f docker-compose.prod.yml logs wolfronix_db
+docker compose -f docker-compose.prod.yml ps wolfronix_db
+docker compose -f docker-compose.prod.yml logs wolfronix_db
 ```
 
 ### SSL certificate issues
 ```bash
-# Check certificate
-openssl s_client -connect localhost:443 -servername your-domain.com
+openssl s_client -connect localhost:9443 -servername your-domain.com
 
 # Regenerate self-signed cert
 cd /opt/wolfronix/deploy/nginx/ssl
 openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
     -keyout privkey.pem -out fullchain.pem \
     -subj "/CN=your-domain.com"
+docker compose -f docker-compose.prod.yml restart nginx
+```
+
+### WebSocket not connecting
+```bash
+# Verify nginx proxies WebSocket correctly
+curl -sk -i -N \
+  -H "Connection: Upgrade" \
+  -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGVzdA==" \
+  "https://localhost:9443/api/v1/stream?wolfronix_key=test"
+# Should return HTTP 101 Switching Protocols
 ```
 
 ### Out of memory
 ```bash
-# Check memory usage
 free -h
 docker stats
-
-# Reduce memory limit in docker-compose.prod.yml
-# Edit GOMEMLIMIT in .env
-```
-
----
-
-## Architecture (Production)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    INTERNET                                  │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼ (Port 443)
-┌─────────────────────────────────────────────────────────────┐
-│                    YOUR SERVER (32GB RAM, 3TB)               │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │                    NGINX                              │   │
-│  │              (SSL Termination)                        │   │
-│  │              (Rate Limiting)                          │   │
-│  │              (Load Balancing)                         │   │
-│  └──────────────────────┬───────────────────────────────┘   │
-│                         │                                    │
-│                         ▼ (Internal)                         │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              WOLFRONIX ENGINE                         │   │
-│  │              (24GB Memory)                            │   │
-│  │              (Go 1.22)                                │   │
-│  └────────┬─────────────────────────────┬───────────────┘   │
-│           │                             │                    │
-│           ▼                             ▼                    │
-│  ┌────────────────┐           ┌────────────────────┐        │
-│  │  PostgreSQL    │           │  Encrypted Files   │        │
-│  │  (4GB Memory)  │           │  (3TB Storage)     │        │
-│  └────────────────┘           └────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
+# Edit GOMEMLIMIT in .env, then:
+docker compose -f docker-compose.prod.yml restart wolfronix
 ```
 
 ---
 
 ## Security Checklist
 
-- [ ] Changed default passwords in `.env`
-- [ ] Firewall configured (only 22, 80, 443 open)
-- [ ] SSL certificate installed (Let's Encrypt or trusted CA)
+- [ ] Default passwords changed in `.env` (auto-generated by deploy.sh)
 - [ ] `.env` file has restricted permissions (`chmod 600`)
-- [ ] Regular backups configured
-- [ ] Monitoring set up
-- [ ] SSH key authentication (disable password login)
+- [ ] Firewall configured (only SSH + 9080 + 9443 open)
+- [ ] SSL certificate installed (Let's Encrypt for production)
+- [ ] ADMIN_API_KEY stored securely (needed for enterprise management)
+- [ ] ALLOWED_ORIGINS set to your frontend domain (not `*`)
+- [ ] Regular database backups configured
+- [ ] SSH key authentication enabled (disable password login)
 
 ---
 
 ## Support
 
 - Documentation: https://wolfronix.com/docs
-- GitHub Issues: https://github.com/wolfronix/wolfronix_go/issues
+- Issues: https://github.com/wolfronix/wolfronix_go/issues
 - Email: support@wolfronix.com
