@@ -1,7 +1,39 @@
+# Git
+.git/
+.gitignore
+
+# Data / secrets
 wolfronix.db
 wolfronix_data/
-.git/
-client/
+.env
+.env.*
 *.crt
 *.key
-*.txt
+*.pem
+
+# Non-Go directories (not needed for build)
+Wolfronix_saas/
+sdk/
+deploy/
+docs/
+test/
+scripts/
+migrations/
+client/
+node_modules/
+
+# Documentation
+*.md
+LICENSE
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+
+# Build artifacts
+*.exe
+*.test

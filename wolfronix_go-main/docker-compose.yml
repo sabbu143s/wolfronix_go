@@ -19,7 +19,7 @@ services:
 
   wolfronix:
     build: .
-    container_name: wolfronix_v3
+    container_name: wolfronix_engine
     ports:
       - "5002:5001" # Host Port 5002 (HTTPS) -> Container Port 5001
     volumes:
