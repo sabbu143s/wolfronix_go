@@ -18,8 +18,16 @@ os.makedirs(KEYS_DIR, exist_ok=True)
 # For this mock, we'll just use file system and some simple JSON files
 file_metadata = {}
 
-print(f"🚀 Mock Client API running on port 8080")
+print(f"🚀 Mock Client API running on port 4000")
 print(f"📂 Storage directory: {os.path.abspath(STORAGE_DIR)}")
+
+# Auto-increment file ID
+_next_file_id = {"val": 1}
+
+def _gen_file_id():
+    fid = _next_file_id["val"]
+    _next_file_id["val"] += 1
+    return fid
 
 @app.route('/api/wolfronix/files/upload', methods=['POST'])
 def upload_file():
@@ -31,7 +39,7 @@ def upload_file():
         return jsonify({"error": "Missing metadata"}), 400
     
     file_meta = json.loads(metadata_json)
-    file_id = int(time.time() * 1000) # Simple ID generation
+    file_id = _gen_file_id()
     file_meta['id'] = file_id
     
     # Encrypted data file
@@ -47,7 +55,24 @@ def upload_file():
     with open(meta_path, 'w') as f:
         json.dump(file_meta, f)
         
-    print(f"✅ Stored file {file_id}: {file_meta['filename']}")
+    print(f"✅ Stored file {file_id}: {file_meta.get('filename', 'unknown')}")
+    return jsonify({"id": file_id}), 201
+
+@app.route('/api/wolfronix/files', methods=['POST'])
+def store_file_metadata():
+    """Store file metadata only (JSON body, no multipart upload)."""
+    data = request.json
+    if not data:
+        return jsonify({"error": "Missing JSON body"}), 400
+
+    file_id = _gen_file_id()
+    data['id'] = file_id
+
+    meta_path = os.path.join(FILES_DIR, f"{file_id}.json")
+    with open(meta_path, 'w') as f:
+        json.dump(data, f)
+
+    print(f"📝 Stored metadata {file_id}: {data.get('filename', 'unknown')}")
     return jsonify({"id": file_id}), 201
 
 @app.route('/api/wolfronix/files/<int:file_id>', methods=['GET'])
@@ -122,6 +147,40 @@ def get_public_key(user_id):
         data = json.load(f)
         
     return jsonify({"public_key_pem": data.get('public_key_pem')})
+
+@app.route('/api/wolfronix/files/<int:file_id>', methods=['DELETE'])
+def delete_file(file_id):
+    """Delete a file and its metadata."""
+    meta_path = os.path.join(FILES_DIR, f"{file_id}.json")
+    data_path = os.path.join(FILES_DIR, f"{file_id}.enc")
+    
+    if not os.path.exists(meta_path):
+        return jsonify({"error": "File not found"}), 404
+    
+    os.remove(meta_path)
+    if os.path.exists(data_path):
+        os.remove(data_path)
+    
+    print(f"🗑️  Deleted file {file_id}")
+    return jsonify({"status": "deleted", "id": file_id}), 200
+
+@app.route('/api/wolfronix/dev/files', methods=['POST'])
+def store_dev_files():
+    """Store fake/development data (Layer 1 fake-gen output)."""
+    data = request.json
+    if not data:
+        return jsonify({"error": "Missing JSON body"}), 400
+
+    file_id = _gen_file_id()
+    data['id'] = file_id
+    data['dev'] = True
+
+    meta_path = os.path.join(FILES_DIR, f"dev_{file_id}.json")
+    with open(meta_path, 'w') as f:
+        json.dump(data, f)
+
+    print(f"🧪 Stored dev data {file_id}")
+    return jsonify({"id": file_id}), 201
 
 if __name__ == '__main__':
     # Listen on all interfaces

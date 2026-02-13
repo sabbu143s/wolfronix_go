@@ -217,6 +217,9 @@ cd /opt/wolfronix/deploy
 chmod +x test_enterprise.sh
 ./test_enterprise.sh https://localhost:9443 your-admin-api-key
 
+# With mock client API endpoint (optional, defaults to http://localhost:4000/api)
+./test_enterprise.sh https://localhost:9443 your-admin-api-key http://localhost:4000/api
+
 # Tests: health → register → keys → encrypt → messages → deactivate
 ```
 
@@ -262,11 +265,23 @@ sudo firewall-cmd --reload
 | | `POST /api/v1/messages/decrypt` | X-Wolfronix-Key |
 | | `POST /api/v1/messages/batch/encrypt` | X-Wolfronix-Key |
 | **Streaming** | `WSS /api/v1/stream` | `wolfronix_key` query param |
-| **Keys** | `POST /api/v1/keys/register` | X-Wolfronix-Key |
+| **Keys** | `POST /api/v1/keys` | X-Wolfronix-Key |
+| | `GET /api/v1/keys/{userId}` | X-Wolfronix-Key |
+| | `POST /api/v1/keys/register` | X-Wolfronix-Key |
 | | `POST /api/v1/keys/login` | X-Wolfronix-Key |
+| | `GET /api/v1/keys/public/{clientID}/{userID}` | X-Wolfronix-Key |
 | **Enterprise** | `POST /api/v1/enterprise/register` | X-Admin-Key |
 | | `GET /api/v1/enterprise/clients` | X-Admin-Key |
+| | `GET /api/v1/enterprise/clients/{id}` | X-Admin-Key |
+| | `PUT /api/v1/enterprise/clients/{id}` | X-Admin-Key |
 | | `DELETE /api/v1/enterprise/clients/{id}` | X-Admin-Key |
+| **Metrics** | `GET /api/v1/metrics/summary` | X-Wolfronix-Key |
+| | `GET /api/v1/metrics/clients` | X-Wolfronix-Key |
+| | `GET /api/v1/metrics/client/{clientID}` | X-Wolfronix-Key |
+| | `GET /api/v1/metrics/client/{clientID}/stats` | X-Wolfronix-Key |
+| | `POST /api/v1/metrics/users` | X-Wolfronix-Key |
+| | `DELETE /api/v1/metrics/users` | X-Wolfronix-Key |
+| | `POST /api/v1/metrics/login` | X-Wolfronix-Key |
 
 ---
 

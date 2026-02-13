@@ -196,7 +196,10 @@ func (g *FakeDataGenerator) FakeFileContent(originalSize int) []byte {
 	}
 
 	fake := make([]byte, fakeSize)
-	rand.Read(fake)
+	if _, err := rand.Read(fake); err != nil {
+		// Fallback: return zero-filled buffer (this is fake data, not security-critical)
+		return fake
+	}
 
 	return fake
 }
@@ -215,7 +218,7 @@ func (g *FakeDataGenerator) FakeFileContentWithMarker(originalSize int, filename
 	}
 
 	fakeContent := make([]byte, remainingSize)
-	rand.Read(fakeContent)
+	_, _ = rand.Read(fakeContent) // Best effort — fake data, not security-critical
 
 	return append(markerBytes, fakeContent...)
 }
@@ -261,7 +264,7 @@ func (g *FakeDataGenerator) GenerateFakeBase64(originalLength int) string {
 	}
 
 	randomBytes := make([]byte, byteLength)
-	rand.Read(randomBytes)
+	_, _ = rand.Read(randomBytes) // Best effort — fake data
 
 	return base64.StdEncoding.EncodeToString(randomBytes)[:originalLength]
 }

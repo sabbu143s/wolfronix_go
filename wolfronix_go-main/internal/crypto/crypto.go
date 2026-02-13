@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -43,7 +44,9 @@ func EncryptAESGCM(plainText string, key []byte) (string, error) {
 		return "", err
 	}
 	nonce := make([]byte, gcm.NonceSize())
-	io.ReadFull(rand.Reader, nonce)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("nonce generation failed: %w", err)
+	}
 	return base64.StdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(plainText), nil)), nil
 }
 
@@ -69,33 +72,69 @@ func DecryptAESGCM(b64Cipher string, key []byte) (string, error) {
 }
 
 // --- C. RSA UTILITIES ---
-func GenerateRSAKeys() (string, string) {
+
+// GenerateRSAKeys generates a 2048-bit RSA key pair and returns (privatePEM, publicPEM, error).
+func GenerateRSAKeys() (string, string, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		panic("crypto/rand failure: " + err.Error())
+		return "", "", fmt.Errorf("RSA key generation failed: %w", err)
 	}
 	privBytes := x509.MarshalPKCS1PrivateKey(priv)
 	pubBytes := x509.MarshalPKCS1PublicKey(&priv.PublicKey)
 	return string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: privBytes})),
-		string(pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: pubBytes}))
+		string(pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: pubBytes})),
+		nil
 }
 
+// EncryptRSA encrypts data with an RSA public key (PKCS1 or PKIX/SPKI format).
 func EncryptRSA(data []byte, pubKeyPEM string) (string, error) {
 	block, _ := pem.Decode([]byte(pubKeyPEM))
 	if block == nil {
-		return "", errors.New("bad key")
+		return "", errors.New("bad key: failed to decode PEM block")
 	}
-	pub, _ := x509.ParsePKCS1PublicKey(block.Bytes)
+
+	// Try PKCS1 first, then fall back to PKIX/SPKI (Web Crypto API format)
+	var pub *rsa.PublicKey
+	if k, err := x509.ParsePKCS1PublicKey(block.Bytes); err == nil {
+		pub = k
+	} else if generic, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
+		if rsaPub, ok := generic.(*rsa.PublicKey); ok {
+			pub = rsaPub
+		} else {
+			return "", errors.New("bad key: not an RSA public key")
+		}
+	} else {
+		return "", errors.New("bad key: unsupported public key format")
+	}
+
 	enc, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, pub, data, nil)
-	return base64.StdEncoding.EncodeToString(enc), err
+	if err != nil {
+		return "", fmt.Errorf("RSA encryption failed: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(enc), nil
 }
 
+// DecryptRSA decrypts base64-encoded data with an RSA private key (PKCS1 or PKCS8 format).
 func DecryptRSA(b64Data string, privKeyPEM string) ([]byte, error) {
 	block, _ := pem.Decode([]byte(privKeyPEM))
 	if block == nil {
-		return nil, errors.New("bad key")
+		return nil, errors.New("bad key: failed to decode PEM block")
 	}
-	priv, _ := x509.ParsePKCS1PrivateKey(block.Bytes)
+
+	// Try PKCS1 first, then fall back to PKCS8
+	var priv *rsa.PrivateKey
+	if k, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		priv = k
+	} else if generic, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		if rsaPriv, ok := generic.(*rsa.PrivateKey); ok {
+			priv = rsaPriv
+		} else {
+			return nil, errors.New("bad key: not an RSA private key")
+		}
+	} else {
+		return nil, errors.New("bad key: unsupported private key format")
+	}
+
 	data, err := base64.StdEncoding.DecodeString(b64Data)
 	if err != nil {
 		return nil, err

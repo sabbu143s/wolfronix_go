@@ -13,6 +13,13 @@ import (
 	"time"
 )
 
+// maxResponseSize limits how much data we read from client API responses
+// to prevent OOM attacks from malicious endpoints. (10 MB for metadata, 512 MB for file data)
+const (
+	maxResponseSize     = 10 * 1024 * 1024  // 10 MB
+	maxFileResponseSize = 512 * 1024 * 1024 // 512 MB
+)
+
 // ClientDBConnector handles communication with client's database API
 type ClientDBConnector struct {
 	httpClient *http.Client
@@ -88,14 +95,14 @@ func (c *ClientDBConnector) StoreFileMetadata(config *ClientConfig, file *Stored
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return 0, fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
 		ID int64 `json:"id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&result); err != nil {
 		return 0, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -140,14 +147,14 @@ func (c *ClientDBConnector) StoreFileWithData(config *ClientConfig, file *Stored
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return 0, fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
 		ID int64 `json:"id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&result); err != nil {
 		return 0, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -182,12 +189,12 @@ func (c *ClientDBConnector) GetFileMetadata(config *ClientConfig, fileID int64, 
 		return nil, errors.New("access denied")
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return nil, fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var file StoredFile
-	if err := json.NewDecoder(resp.Body).Decode(&file); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&file); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -218,11 +225,11 @@ func (c *ClientDBConnector) GetFileData(config *ClientConfig, fileID int64, user
 		return nil, errors.New("file not found")
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return nil, fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, maxFileResponseSize))
 }
 
 // ListFiles retrieves list of files for a user from client's DB
@@ -246,12 +253,12 @@ func (c *ClientDBConnector) ListFiles(config *ClientConfig, userID string) ([]St
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return nil, fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var files []StoredFile
-	if err := json.NewDecoder(resp.Body).Decode(&files); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&files); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -279,7 +286,7 @@ func (c *ClientDBConnector) DeleteFile(config *ClientConfig, fileID int64, userI
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -314,7 +321,7 @@ func (c *ClientDBConnector) StoreUserKey(config *ClientConfig, key *StoredKey) e
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -345,12 +352,12 @@ func (c *ClientDBConnector) GetUserKey(config *ClientConfig, userID string) (*St
 		return nil, errors.New("user key not found")
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return nil, fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var key StoredKey
-	if err := json.NewDecoder(resp.Body).Decode(&key); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&key); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -380,14 +387,14 @@ func (c *ClientDBConnector) GetUserPublicKey(config *ClientConfig, userID string
 		return "", errors.New("user not found")
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return "", fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
 		PublicKeyPEM string `json:"public_key_pem"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(&result); err != nil {
 		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -428,7 +435,7 @@ func (c *ClientDBConnector) StoreFakeData(config *ClientConfig, prodFileID int64
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 		return fmt.Errorf("client API error (status %d): %s", resp.StatusCode, string(body))
 	}
 

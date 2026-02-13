@@ -256,7 +256,7 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 	// Get authenticated client ID (enforces caller can only use their own client)
 	clientID, authErr := getAuthenticatedClientID(r)
 	if authErr != nil {
-		http.Error(w, `{"error": "`+authErr.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -423,7 +423,7 @@ func encryptRSA(data []byte, pubPEM string) string {
 func listFilesHandler(w http.ResponseWriter, r *http.Request) {
 	clientID, err := getAuthenticatedClientID(r)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 	userID := r.Header.Get("X-User-ID")
@@ -500,7 +500,7 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	// Get client ID - REQUIRED in enterprise mode (verified by middleware)
 	clientID, err := getAuthenticatedClientID(r)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -637,7 +637,7 @@ func deleteStoredFileHandler(w http.ResponseWriter, r *http.Request) {
 
 	clientID, err := getAuthenticatedClientID(r)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -690,7 +690,7 @@ func getFileKeyPartHandler(w http.ResponseWriter, r *http.Request) {
 
 	clientID, clientErr := getAuthenticatedClientID(r)
 	if clientErr != nil {
-		http.Error(w, `{"error": "`+clientErr.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -740,7 +740,7 @@ func getUserKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	clientID, clientErr := getAuthenticatedClientID(r)
 	if clientErr != nil {
-		http.Error(w, `{"error": "`+clientErr.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -983,7 +983,10 @@ func loadOrGenerateKeys() {
 		}
 
 		// Save Private Key
-		keyOut, _ := os.Create("server.key")
+		keyOut, err := os.Create("server.key")
+		if err != nil {
+			log.Fatal("❌ Failed to create server.key: ", err)
+		}
 		pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(ServerPrivateKey)})
 		keyOut.Close()
 
@@ -1004,7 +1007,10 @@ func loadOrGenerateKeys() {
 		}
 
 		// Save Cert
-		certOut, _ := os.Create("server.crt")
+		certOut, err := os.Create("server.crt")
+		if err != nil {
+			log.Fatal("❌ Failed to create server.crt: ", err)
+		}
 		pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 		certOut.Close()
 	}

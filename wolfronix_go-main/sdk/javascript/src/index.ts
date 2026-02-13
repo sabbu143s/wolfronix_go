@@ -3,7 +3,7 @@
  * Zero-knowledge encryption made simple
  * 
  * @package @wolfronix/sdk
- * @version 3.0.0
+ * @version 2.3.0
  */
 
 import {

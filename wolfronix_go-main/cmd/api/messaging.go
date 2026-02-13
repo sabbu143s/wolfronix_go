@@ -173,7 +173,7 @@ func messageEncryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	clientID, err := getAuthenticatedClientID(r)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -234,7 +234,10 @@ func messageEncryptHandler(w http.ResponseWriter, r *http.Request) {
 		copy(keyPartB, aesKey[16:])
 
 		tagBytes := make([]byte, 16)
-		rand.Read(tagBytes)
+		if _, err := rand.Read(tagBytes); err != nil {
+			http.Error(w, `{"error": "Tag generation failed"}`, 500)
+			return
+		}
 		tag := fmt.Sprintf("msg-%x", tagBytes)
 
 		messageKeyMu.Lock()
@@ -274,7 +277,7 @@ func messageDecryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	clientID, err := getAuthenticatedClientID(r)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -368,7 +371,7 @@ func messageBatchEncryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	clientID, err := getAuthenticatedClientID(r)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -417,7 +420,10 @@ func messageBatchEncryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Generate random 4-byte prefix for nonces (ensures uniqueness across batches)
 	noncePrefix := make([]byte, 4)
-	rand.Read(noncePrefix)
+	if _, err := rand.Read(noncePrefix); err != nil {
+		http.Error(w, `{"error": "Nonce generation failed"}`, 500)
+		return
+	}
 
 	results := make([]BatchEncryptResult, len(req.Messages))
 	for i, msg := range req.Messages {
@@ -443,7 +449,10 @@ func messageBatchEncryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	if layer == 4 {
 		tagBytes := make([]byte, 16)
-		rand.Read(tagBytes)
+		if _, err := rand.Read(tagBytes); err != nil {
+			http.Error(w, `{"error": "Tag generation failed"}`, 500)
+			return
+		}
 		tag := fmt.Sprintf("batch-%x", tagBytes)
 
 		keyPartB := make([]byte, 16)
@@ -513,7 +522,7 @@ var wsUpgrader = websocket.Upgrader{
 func streamHandler(w http.ResponseWriter, r *http.Request) {
 	clientID, err := getAuthenticatedClientID(r)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, 403)
+		http.Error(w, `{"error": "Authentication failed"}`, 403)
 		return
 	}
 
@@ -555,7 +564,10 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 	case "encrypt":
 		// Generate new AES key for this stream session
 		aesKey := make([]byte, 32)
-		rand.Read(aesKey)
+		if _, err := rand.Read(aesKey); err != nil {
+			writeWSError(conn, "Key generation failed")
+			return
+		}
 
 		block, err := aes.NewCipher(aesKey)
 		if err != nil {
@@ -570,7 +582,10 @@ func streamHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Store key_part_b, send key_part_a to client
 		tagBytes := make([]byte, 16)
-		rand.Read(tagBytes)
+		if _, err := rand.Read(tagBytes); err != nil {
+			writeWSError(conn, "Tag generation failed")
+			return
+		}
 		streamTag := fmt.Sprintf("stream-%x", tagBytes)
 
 		keyPartB := make([]byte, 16)
