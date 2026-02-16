@@ -1,6 +1,6 @@
 {
   "name": "wolfronix-sdk",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Official Wolfronix SDK for JavaScript/TypeScript - Zero-knowledge encryption made simple",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

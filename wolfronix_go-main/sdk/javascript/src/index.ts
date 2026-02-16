@@ -3,7 +3,7 @@
  * Zero-knowledge encryption made simple
  * 
  * @package @wolfronix/sdk
- * @version 2.3.0
+ * @version 2.4.0
  */
 
 import {
@@ -143,6 +143,83 @@ export interface StreamSession {
 export interface StreamChunk {
   data: string;  // base64
   seq: number;
+}
+
+// --- Enterprise Admin Types ---
+
+/** Supported managed connector database types */
+export type DBType = 'supabase' | 'mongodb' | 'mysql' | 'firebase' | 'postgresql' | 'custom_api';
+
+export interface WolfronixAdminConfig {
+  /** Wolfronix server base URL */
+  baseUrl: string;
+  /** Admin API key (X-Admin-Key header) */
+  adminKey: string;
+  /** Request timeout in milliseconds (default: 30000) */
+  timeout?: number;
+  /** Skip SSL verification for self-signed certs (default: false) */
+  insecure?: boolean;
+}
+
+export interface EnterpriseClient {
+  id: number;
+  client_id: string;
+  client_name: string;
+  api_endpoint: string;
+  api_key: string;
+  wolfronix_key: string;
+  db_type: DBType;
+  db_config: string;
+  user_count: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RegisterClientRequest {
+  /** Unique client identifier */
+  client_id: string;
+  /** Human-readable client name */
+  client_name: string;
+  /** Database type — managed connector or custom_api */
+  db_type: DBType;
+  /** JSON string with database credentials (required for managed connectors) */
+  db_config?: string;
+  /** Client's storage API URL (required only for custom_api) */
+  api_endpoint?: string;
+  /** API key for client's custom API (optional) */
+  api_key?: string;
+}
+
+export interface RegisterClientResponse {
+  status: string;
+  client_id: string;
+  wolfronix_key: string;
+  db_type: DBType;
+  message: string;
+  connector?: string;
+  api_endpoint?: string;
+}
+
+export interface ListClientsResponse {
+  clients: EnterpriseClient[] | null;
+  count: number;
+}
+
+export interface UpdateClientRequest {
+  api_endpoint?: string;
+  db_type?: DBType;
+  db_config?: string;
+}
+
+export interface UpdateClientResponse {
+  status: string;
+  message: string;
+}
+
+export interface DeactivateClientResponse {
+  status: string;
+  message: string;
 }
 
 
@@ -1312,6 +1389,152 @@ export class WolfronixStream {
  */
 export function createClient(config: WolfronixConfig | string): Wolfronix {
   return new Wolfronix(config);
+}
+
+// ============================================================================
+// WolfronixAdmin — Enterprise Client Management
+// ============================================================================
+
+/**
+ * Admin client for managing enterprise clients.
+ * Uses X-Admin-Key authentication (not user auth).
+ * 
+ * @example
+ * ```typescript
+ * import { WolfronixAdmin } from '@wolfronix/sdk';
+ * 
+ * const admin = new WolfronixAdmin({
+ *   baseUrl: 'https://wolfronix-server:9443',
+ *   adminKey: 'your-admin-api-key'
+ * });
+ * 
+ * // Register a client with managed Supabase connector
+ * const result = await admin.registerClient({
+ *   client_id: 'acme_corp',
+ *   client_name: 'Acme Corporation',
+ *   db_type: 'supabase',
+ *   db_config: JSON.stringify({
+ *     supabase_url: 'https://xxx.supabase.co',
+ *     supabase_service_key: 'eyJ...'
+ *   })
+ * });
+ * console.log('Wolfronix key:', result.wolfronix_key);
+ * ```
+ */
+export class WolfronixAdmin {
+  private readonly baseUrl: string;
+  private readonly adminKey: string;
+  private readonly timeout: number;
+  private readonly insecure: boolean;
+
+  constructor(config: WolfronixAdminConfig) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.adminKey = config.adminKey;
+    this.timeout = config.timeout || 30000;
+    this.insecure = config.insecure || false;
+  }
+
+  private async request<T>(
+    method: string,
+    endpoint: string,
+    body?: unknown
+  ): Promise<T> {
+    const url = `${this.baseUrl}${endpoint}`;
+    const headers: Record<string, string> = {
+      'X-Admin-Key': this.adminKey,
+      'Accept': 'application/json'
+    };
+
+    if (body) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    const fetchOptions: RequestInit = {
+      method,
+      headers,
+      signal: controller.signal
+    };
+
+    if (this.insecure && typeof process !== 'undefined') {
+      try {
+        const { Agent } = await import('undici');
+        (fetchOptions as any).dispatcher = new Agent({
+          connect: { rejectUnauthorized: false }
+        });
+      } catch { /* undici not available */ }
+    }
+
+    if (body) {
+      fetchOptions.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, fetchOptions);
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      throw new WolfronixError(
+        (errorBody as any).error || `Request failed with status ${response.status}`,
+        'ADMIN_REQUEST_ERROR',
+        response.status,
+        errorBody as Record<string, unknown>
+      );
+    }
+
+    return await response.json() as T;
+  }
+
+  /**
+   * Register a new enterprise client.
+   * For managed connectors (supabase, mongodb, mysql, firebase, postgresql),
+   * provide db_type + db_config. For custom APIs, use db_type: 'custom_api' + api_endpoint.
+   */
+  async registerClient(params: RegisterClientRequest): Promise<RegisterClientResponse> {
+    return this.request<RegisterClientResponse>('POST', '/api/v1/enterprise/register', params);
+  }
+
+  /**
+   * List all registered enterprise clients.
+   */
+  async listClients(): Promise<ListClientsResponse> {
+    return this.request<ListClientsResponse>('GET', '/api/v1/enterprise/clients');
+  }
+
+  /**
+   * Get details for a specific client.
+   */
+  async getClient(clientId: string): Promise<EnterpriseClient> {
+    return this.request<EnterpriseClient>('GET', `/api/v1/enterprise/clients/${encodeURIComponent(clientId)}`);
+  }
+
+  /**
+   * Update a client's configuration (api_endpoint, db_type, db_config).
+   */
+  async updateClient(clientId: string, params: UpdateClientRequest): Promise<UpdateClientResponse> {
+    return this.request<UpdateClientResponse>('PUT', `/api/v1/enterprise/clients/${encodeURIComponent(clientId)}`, params);
+  }
+
+  /**
+   * Deactivate (soft-delete) a client. Their wolfronix_key will stop working.
+   */
+  async deactivateClient(clientId: string): Promise<DeactivateClientResponse> {
+    return this.request<DeactivateClientResponse>('DELETE', `/api/v1/enterprise/clients/${encodeURIComponent(clientId)}`);
+  }
+
+  /**
+   * Check server health.
+   */
+  async healthCheck(): Promise<boolean> {
+    try {
+      await this.request<{ status: string }>('GET', '/health');
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 export default Wolfronix;

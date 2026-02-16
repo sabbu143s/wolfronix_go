@@ -959,6 +959,8 @@ func updateEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		APIEndpoint string `json:"api_endpoint"`
+		DBType      string `json:"db_type"`
+		DBConfig    string `json:"db_config"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -976,6 +978,30 @@ func updateEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 
 		if err := clientRegistry.UpdateClientEndpoint(clientID, req.APIEndpoint); err != nil {
 			http.Error(w, "Failed to update client", 500)
+			return
+		}
+	}
+
+	// Update db_type / db_config if provided
+	if req.DBType != "" || req.DBConfig != "" {
+		validDBTypes := map[string]bool{
+			clientdb.DBTypeSupabase: true, clientdb.DBTypeMongoDB: true,
+			clientdb.DBTypeMySQL: true, clientdb.DBTypeFirebase: true,
+			clientdb.DBTypePostgreSQL: true, clientdb.DBTypeCustomAPI: true,
+		}
+		if req.DBType != "" && !validDBTypes[req.DBType] {
+			http.Error(w, `{"error": "Invalid db_type"}`, 400)
+			return
+		}
+		if req.DBConfig != "" {
+			var configCheck map[string]interface{}
+			if err := json.Unmarshal([]byte(req.DBConfig), &configCheck); err != nil {
+				http.Error(w, `{"error": "db_config must be valid JSON"}`, 400)
+				return
+			}
+		}
+		if err := clientRegistry.UpdateClientConfig(clientID, req.DBType, req.DBConfig); err != nil {
+			http.Error(w, "Failed to update client config", 500)
 			return
 		}
 	}

@@ -328,3 +328,14 @@ func (r *ClientRegistry) UpdateClientEndpoint(clientID, newEndpoint string) erro
 	_, err := r.db.Exec(query, clientID, newEndpoint)
 	return err
 }
+
+// UpdateClientConfig updates a client's db_type and/or db_config
+func (r *ClientRegistry) UpdateClientConfig(clientID, dbType, dbConfig string) error {
+	query := `
+		UPDATE client_registry 
+		SET db_type = $2, db_config = $3, updated_at = CURRENT_TIMESTAMP
+		WHERE client_id = $1
+	`
+	_, err := r.db.Exec(query, clientID, dbType, dbConfig)
+	return err
+}
