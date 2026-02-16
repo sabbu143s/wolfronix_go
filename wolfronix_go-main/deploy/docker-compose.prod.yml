@@ -109,25 +109,103 @@ services:
     networks:
       - wolfronix_network
 
-  # ─── Database Connector (optional — pick one, uncomment & configure) ───────
-  # Pre-built connectors: ../connectors/{supabase,mongodb,mysql,firebase,postgresql}
+  # ─── Managed Database Connectors ─────────────────────────────────────────────
+  # All 5 connectors run simultaneously. The engine auto-routes to the correct
+  # one based on each client's db_type. Connectors accept dynamic per-request
+  # config via X-Wolfronix-API-Key header (JSON with DB credentials).
   #
-  # To use: uncomment the block below, set CONNECTOR_TYPE to your choice,
-  # create a .env in the connector folder, and set CLIENT_DB_API_ENDPOINT
-  # in the engine's .env to http://wolfronix_connector:8080
-  #
-  # connector:
-  #   build:
-  #     context: ../connectors/${CONNECTOR_TYPE:-postgresql}
-  #     dockerfile: Dockerfile
-  #   container_name: wolfronix_connector
-  #   env_file:
-  #     - ../connectors/${CONNECTOR_TYPE:-postgresql}/.env
-  #   ports:
-  #     - "8080:8080"
-  #   restart: always
-  #   networks:
-  #     - wolfronix_network
+  # Ports: supabase:4001, mongodb:4002, mysql:4003, firebase:4004, postgresql:4005
+  # All are internal-only (no host port exposure needed).
+
+  connector_supabase:
+    build:
+      context: ../connectors/supabase
+      dockerfile: Dockerfile
+    container_name: wolfronix_connector_supabase
+    environment:
+      - PORT=4001
+      - NODE_ENV=production
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - wolfronix_network
+    expose:
+      - "4001"
+
+  connector_mongodb:
+    build:
+      context: ../connectors/mongodb
+      dockerfile: Dockerfile
+    container_name: wolfronix_connector_mongodb
+    environment:
+      - PORT=4002
+      - NODE_ENV=production
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - wolfronix_network
+    expose:
+      - "4002"
+
+  connector_mysql:
+    build:
+      context: ../connectors/mysql
+      dockerfile: Dockerfile
+    container_name: wolfronix_connector_mysql
+    environment:
+      - PORT=4003
+      - NODE_ENV=production
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - wolfronix_network
+    expose:
+      - "4003"
+
+  connector_firebase:
+    build:
+      context: ../connectors/firebase
+      dockerfile: Dockerfile
+    container_name: wolfronix_connector_firebase
+    environment:
+      - PORT=4004
+      - NODE_ENV=production
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - wolfronix_network
+    expose:
+      - "4004"
+
+  connector_postgresql:
+    build:
+      context: ../connectors/postgresql
+      dockerfile: Dockerfile
+    container_name: wolfronix_connector_postgresql
+    environment:
+      - PORT=4005
+      - NODE_ENV=production
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - wolfronix_network
+    expose:
+      - "4005"
 
 volumes:
   wolfronix_data:

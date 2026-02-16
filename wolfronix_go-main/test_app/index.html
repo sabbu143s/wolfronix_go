@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wolfronix Test App</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- ─── Config Bar ─── -->
+    <div id="config-bar">
+        <div class="config-inner">
+            <div class="config-field">
+                <label>Server URL</label>
+                <input type="text" id="serverUrl" placeholder="https://49.206.202.13:9443" value="">
+            </div>
+            <div class="config-field">
+                <label>Client ID</label>
+                <input type="text" id="clientId" placeholder="your_client_id">
+            </div>
+            <div class="config-field">
+                <label>Wolfronix Key</label>
+                <input type="text" id="wolfronixKey" placeholder="your_wolfronix_key">
+            </div>
+            <button id="connectBtn" onclick="initClient()">Connect</button>
+        </div>
+        <div id="status-badge" class="badge badge-disconnected">Disconnected</div>
+    </div>
+
+    <!-- ─── Navigation ─── -->
+    <nav id="main-nav">
+        <button class="nav-btn active" data-tab="auth">🔐 Auth</button>
+        <button class="nav-btn" data-tab="files">📁 Files</button>
+        <button class="nav-btn" data-tab="messages">💬 Messages</button>
+        <button class="nav-btn" data-tab="logs">📋 Logs</button>
+    </nav>
+
+    <!-- ─── Auth Tab ─── -->
+    <section id="tab-auth" class="tab active">
+        <div class="card">
+            <h2>Register New User</h2>
+            <p class="desc">Creates RSA key pair → wraps private key with password → stores on server (zero-knowledge)</p>
+            <div class="form-row">
+                <input type="email" id="regEmail" placeholder="Email (user ID)">
+                <input type="password" id="regPassword" placeholder="Password">
+                <button onclick="doRegister()">Register</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Login</h2>
+            <p class="desc">Fetches wrapped keys → unwraps private key client-side with password</p>
+            <div class="form-row">
+                <input type="email" id="loginEmail" placeholder="Email (user ID)">
+                <input type="password" id="loginPassword" placeholder="Password">
+                <button onclick="doLogin()">Login</button>
+            </div>
+        </div>
+
+        <div class="card" id="user-info" style="display:none;">
+            <h2>Logged In</h2>
+            <div class="info-grid">
+                <span>User:</span><span id="currentUser">—</span>
+                <span>Keys:</span><span id="keyStatus">—</span>
+            </div>
+            <button class="btn-danger" onclick="doLogout()">Logout</button>
+        </div>
+    </section>
+
+    <!-- ─── Files Tab ─── -->
+    <section id="tab-files" class="tab">
+        <div class="card">
+            <h2>Encrypt File</h2>
+            <p class="desc">4-layer encryption: AES-256-GCM → Shamir split → RSA wrap → stored on client DB</p>
+            <div class="form-row">
+                <input type="file" id="fileInput">
+                <button onclick="doEncrypt()">Encrypt & Upload</button>
+            </div>
+            <div id="encryptResult" class="result-box" style="display:none;"></div>
+        </div>
+
+        <div class="card">
+            <h2>My Encrypted Files</h2>
+            <button onclick="doListFiles()">Refresh</button>
+            <div id="fileList" class="file-list">
+                <p class="placeholder">Click Refresh to load files</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Decrypt File</h2>
+            <p class="desc">Zero-knowledge: server sends RSA-encrypted key → you decrypt client-side → send back → get file</p>
+            <div class="form-row">
+                <input type="text" id="decryptFileId" placeholder="File ID">
+                <button onclick="doDecrypt()">Decrypt & Download</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ─── Messages Tab ─── -->
+    <section id="tab-messages" class="tab">
+        <div class="card">
+            <h2>Server-Side Encrypt (Dual-Key Split)</h2>
+            <p class="desc">Server encrypts with AES → splits key in two → you get key_part_a, server keeps key_part_b</p>
+            <textarea id="msgPlain" rows="3" placeholder="Type your secret message..."></textarea>
+            <div class="form-row">
+                <select id="msgLayer">
+                    <option value="4">Layer 4 (Dual-Key Split)</option>
+                    <option value="3">Layer 3 (AES Only)</option>
+                </select>
+                <button onclick="doMsgEncrypt()">Encrypt</button>
+            </div>
+            <div id="msgEncResult" class="result-box" style="display:none;"></div>
+        </div>
+
+        <div class="card">
+            <h2>Server-Side Decrypt</h2>
+            <p class="desc">Send encrypted_message + nonce + key_part_a + tag → server reassembles key → decrypts</p>
+            <div class="form-row">
+                <button onclick="doMsgDecrypt()" id="decryptMsgBtn" disabled>Decrypt Last Message</button>
+            </div>
+            <div id="msgDecResult" class="result-box" style="display:none;"></div>
+        </div>
+
+        <div class="card">
+            <h2>Batch Encrypt</h2>
+            <p class="desc">Encrypt multiple messages in one round-trip (shared key, individual nonces)</p>
+            <textarea id="batchMsgs" rows="4" placeholder="One message per line..."></textarea>
+            <button onclick="doBatchEncrypt()">Batch Encrypt</button>
+            <div id="batchResult" class="result-box" style="display:none;"></div>
+        </div>
+    </section>
+
+    <!-- ─── Logs Tab ─── -->
+    <section id="tab-logs" class="tab">
+        <div class="card">
+            <h2>Request Log</h2>
+            <button onclick="clearLogs()">Clear</button>
+            <div id="logContainer" class="log-container"></div>
+        </div>
+    </section>
+
+    <script src="app.js"></script>
+</body>
+</html>

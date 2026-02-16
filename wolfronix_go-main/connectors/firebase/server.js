@@ -6,6 +6,11 @@
  * 
  * Metadata → Firestore collections
  * Encrypted file data → Cloud Storage bucket
+ * 
+ * Supports two modes:
+ *   1. Dynamic config — engine passes JSON db_config via X-Wolfronix-API-Key header
+ *      (contains firebase_service_account JSON + firebase_storage_bucket)
+ *   2. Static config  — uses FIREBASE_SERVICE_ACCOUNT file + FIREBASE_STORAGE_BUCKET env var
  */
 
 require('dotenv').config();
@@ -14,33 +19,64 @@ const cors = require('cors');
 const multer = require('multer');
 const admin = require('firebase-admin');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 4004;
 const CONNECTOR_API_KEY = process.env.CONNECTOR_API_KEY;
 const SERVICE_ACCOUNT_PATH = process.env.FIREBASE_SERVICE_ACCOUNT || './serviceAccountKey.json';
 const STORAGE_BUCKET = process.env.FIREBASE_STORAGE_BUCKET;
-
-// Initialize Firebase Admin
-const serviceAccount = require(path.resolve(SERVICE_ACCOUNT_PATH));
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  storageBucket: STORAGE_BUCKET
-});
-
-const db = admin.firestore();
-const bucket = admin.storage().bucket();
 
 // Firestore collections
 const FILES_COL = 'wolfronix_files';
 const KEYS_COL = 'wolfronix_keys';
 const DEV_FILES_COL = 'wolfronix_dev_files';
 
+// ─── Firebase App Cache ──────────────────────────────────────────────────────
+// Maps config hash → { db, bucket }
+const appCache = new Map();
+let defaultFirebase = null; // { db, bucket }
+
+function hashConfig(config) {
+  const key = config.firebase_service_account?.project_id || JSON.stringify(config).slice(0, 64);
+  return crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+function resolveFirebaseApp(config) {
+  const cacheKey = hashConfig(config);
+  if (appCache.has(cacheKey)) return appCache.get(cacheKey);
+
+  const serviceAccount = config.firebase_service_account;
+  if (!serviceAccount || !serviceAccount.project_id) {
+    throw new Error('firebase_service_account with project_id required in config');
+  }
+
+  const storageBucket = config.firebase_storage_bucket || `${serviceAccount.project_id}.appspot.com`;
+  const appName = `dynamic_${cacheKey}`;
+
+  let firebaseApp;
+  try {
+    firebaseApp = admin.app(appName);
+  } catch (e) {
+    firebaseApp = admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      storageBucket: storageBucket
+    }, appName);
+  }
+
+  const entry = {
+    db: firebaseApp.firestore(),
+    bucket: firebaseApp.storage().bucket()
+  };
+  appCache.set(cacheKey, entry);
+  return entry;
+}
+
 // Auto-increment counter (Firestore doesn't have auto-increment)
-async function getNextId(counterName) {
+async function getNextId(db, counterName) {
   const ref = db.collection('wolfronix_counters').doc(counterName);
   const result = await db.runTransaction(async (t) => {
     const doc = await t.get(ref);
@@ -51,25 +87,91 @@ async function getNextId(counterName) {
   return result;
 }
 
+// ─── Initialize Default Firebase ─────────────────────────────────────────────
+function initDefaultFirebase() {
+  try {
+    const serviceAccount = require(path.resolve(SERVICE_ACCOUNT_PATH));
+    const defaultApp = admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      storageBucket: STORAGE_BUCKET
+    });
+    defaultFirebase = {
+      db: defaultApp.firestore(),
+      bucket: defaultApp.storage().bucket()
+    };
+    console.log('✅ Connected to default Firebase project:', serviceAccount.project_id);
+    return true;
+  } catch (e) {
+    console.warn('⚠️  Default Firebase init failed:', e.message);
+    console.warn('   Running in dynamic-config-only mode');
+    // Initialize admin SDK without default app (needed for named apps)
+    try { admin.app(); } catch (_) {
+      // No default app — that's fine for dynamic-only mode
+    }
+    return false;
+  }
+}
+
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-function authenticate(req, res, next) {
-  if (CONNECTOR_API_KEY && req.headers['x-wolfronix-api-key'] !== CONNECTOR_API_KEY) {
+/**
+ * resolveFirebase — replaces simple authenticate middleware.
+ * 
+ * 1. Try to parse X-Wolfronix-API-Key as JSON → create/cache named Firebase app
+ * 2. Fallback: validate as static API key → use default Firebase app
+ * 3. Attach req.fb = { db, bucket }
+ */
+function resolveFirebaseMiddleware(req, res, next) {
+  const apiKey = req.headers['x-wolfronix-api-key'];
+
+  // Mode 1: Dynamic config from engine
+  if (apiKey && apiKey.startsWith('{')) {
+    try {
+      const config = JSON.parse(apiKey);
+      if (!config.firebase_service_account) {
+        return res.status(400).json({ error: 'firebase_service_account required in config' });
+      }
+
+      req.fb = resolveFirebaseApp(config);
+      return next();
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        // Not JSON — fall through to static auth
+      } else {
+        console.error('Firebase dynamic init error:', e.message);
+        return res.status(500).json({ error: 'Failed to init Firebase: ' + e.message });
+      }
+    }
+  }
+
+  // Mode 2: Static API key auth → use default Firebase
+  if (CONNECTOR_API_KEY && apiKey !== CONNECTOR_API_KEY) {
     return res.status(401).json({ error: 'Invalid API key' });
   }
+
+  if (!defaultFirebase) {
+    return res.status(503).json({ error: 'No default Firebase project configured' });
+  }
+
+  req.fb = defaultFirebase;
   next();
 }
-app.use('/wolfronix', authenticate);
+
+app.use('/wolfronix', resolveFirebaseMiddleware);
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
   try {
-    await db.collection(FILES_COL).limit(1).get();
-    res.json({ status: 'healthy', database: 'connected', connector: 'firebase' });
+    if (defaultFirebase) {
+      await defaultFirebase.db.collection(FILES_COL).limit(1).get();
+      res.json({ status: 'healthy', database: 'connected', dynamic_apps: appCache.size, connector: 'firebase' });
+    } else {
+      res.json({ status: appCache.size > 0 ? 'healthy' : 'waiting', database: 'not_configured', dynamic_apps: appCache.size, connector: 'firebase' });
+    }
   } catch (e) {
-    res.status(500).json({ status: 'unhealthy', error: e.message });
+    res.status(500).json({ status: 'unhealthy', error: e.message, connector: 'firebase' });
   }
 });
 
@@ -80,7 +182,8 @@ app.get('/health', async (req, res) => {
 // POST /wolfronix/files — Store file metadata
 app.post('/wolfronix/files', async (req, res) => {
   try {
-    const id = await getNextId('files');
+    const { db } = req.fb;
+    const id = await getNextId(db, 'files');
     const { filename, file_size, key_part_a, key_part_b, iv, enc_time_ms, client_id, user_id, storage_type } = req.body;
 
     await db.collection(FILES_COL).doc(String(id)).set({
@@ -100,13 +203,13 @@ app.post('/wolfronix/files', async (req, res) => {
 // POST /wolfronix/files/upload — Store metadata + encrypted data (multipart)
 app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req, res) => {
   try {
+    const { db, bucket } = req.fb;
     const metadata = JSON.parse(req.body.metadata);
     const encryptedData = req.file?.buffer;
     if (!encryptedData) return res.status(400).json({ error: 'Missing encrypted_data file' });
 
-    const id = await getNextId('files');
+    const id = await getNextId(db, 'files');
 
-    // Store metadata in Firestore
     await db.collection(FILES_COL).doc(String(id)).set({
       id, filename: metadata.filename, file_size: metadata.file_size || 0,
       key_part_a: metadata.key_part_a, key_part_b: metadata.key_part_b,
@@ -116,7 +219,6 @@ app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req,
       created_at: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Store encrypted data in Cloud Storage
     const file = bucket.file(`wolfronix/encrypted/${id}.enc`);
     await file.save(encryptedData, { contentType: 'application/octet-stream' });
 
@@ -130,6 +232,7 @@ app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req,
 // GET /wolfronix/files/:id — Get file metadata
 app.get('/wolfronix/files/:id', async (req, res) => {
   try {
+    const { db } = req.fb;
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
@@ -141,7 +244,6 @@ app.get('/wolfronix/files/:id', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Normalize timestamp for JSON
     const result = { ...data };
     if (result.created_at && result.created_at.toDate) {
       result.created_at = result.created_at.toDate().toISOString();
@@ -156,10 +258,10 @@ app.get('/wolfronix/files/:id', async (req, res) => {
 // GET /wolfronix/files/:id/data — Get encrypted file data (raw bytes)
 app.get('/wolfronix/files/:id/data', async (req, res) => {
   try {
+    const { db, bucket } = req.fb;
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
-    // Verify ownership
     const doc = await db.collection(FILES_COL).doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'File not found' });
 
@@ -168,7 +270,6 @@ app.get('/wolfronix/files/:id/data', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Download from Cloud Storage
     const file = bucket.file(`wolfronix/encrypted/${req.params.id}.enc`);
     const [exists] = await file.exists();
     if (!exists) return res.status(404).json({ error: 'File data not found' });
@@ -186,6 +287,7 @@ app.get('/wolfronix/files/:id/data', async (req, res) => {
 // GET /wolfronix/files?user_id=X — List files for a user
 app.get('/wolfronix/files', async (req, res) => {
   try {
+    const { db } = req.fb;
     const userId = req.query.user_id || req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
     if (!userId) return res.status(400).json({ error: 'user_id is required' });
@@ -214,6 +316,7 @@ app.get('/wolfronix/files', async (req, res) => {
 // DELETE /wolfronix/files/:id — Delete a file
 app.delete('/wolfronix/files/:id', async (req, res) => {
   try {
+    const { db, bucket } = req.fb;
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
@@ -225,14 +328,12 @@ app.delete('/wolfronix/files/:id', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Delete encrypted data from Storage
     try {
       await bucket.file(`wolfronix/encrypted/${req.params.id}.enc`).delete();
     } catch (storageErr) {
       // File may not exist in storage (metadata-only)
     }
 
-    // Delete metadata from Firestore
     await db.collection(FILES_COL).doc(req.params.id).delete();
     res.status(204).send();
   } catch (e) {
@@ -248,6 +349,7 @@ app.delete('/wolfronix/files/:id', async (req, res) => {
 // POST /wolfronix/keys — Store user's wrapped key
 app.post('/wolfronix/keys', async (req, res) => {
   try {
+    const { db } = req.fb;
     const { user_id, client_id, public_key_pem, encrypted_private_key, salt } = req.body;
     const docId = `${user_id}_${client_id}`;
 
@@ -266,6 +368,7 @@ app.post('/wolfronix/keys', async (req, res) => {
 // GET /wolfronix/keys/:userId — Get user's wrapped key
 app.get('/wolfronix/keys/:userId', async (req, res) => {
   try {
+    const { db } = req.fb;
     const clientId = req.headers['x-client-id'];
     const docId = `${req.params.userId}_${clientId}`;
 
@@ -281,6 +384,7 @@ app.get('/wolfronix/keys/:userId', async (req, res) => {
 // GET /wolfronix/keys/:userId/public — Get user's public key only
 app.get('/wolfronix/keys/:userId/public', async (req, res) => {
   try {
+    const { db } = req.fb;
     const clientId = req.headers['x-client-id'];
     const docId = `${req.params.userId}_${clientId}`;
 
@@ -300,8 +404,9 @@ app.get('/wolfronix/keys/:userId/public', async (req, res) => {
 // POST /wolfronix/dev/files — Store fake/masked data
 app.post('/wolfronix/dev/files', async (req, res) => {
   try {
+    const { db } = req.fb;
     const { prod_file_id, filename, fake_data } = req.body;
-    const id = await getNextId('dev_files');
+    const id = await getNextId(db, 'dev_files');
 
     await db.collection(DEV_FILES_COL).doc(String(id)).set({
       id, prod_file_id, filename,
@@ -317,8 +422,10 @@ app.post('/wolfronix/dev/files', async (req, res) => {
 });
 
 // ─── Start Server ────────────────────────────────────────────────────────────
+initDefaultFirebase();
+
 app.listen(PORT, () => {
   console.log(`🔌 Wolfronix Firebase Connector running on port ${PORT}`);
-  console.log(`   Storage Bucket: ${STORAGE_BUCKET}`);
+  console.log(`   Mode: ${defaultFirebase ? 'static + dynamic' : 'dynamic-only'}`);
   console.log(`   Health check: http://localhost:${PORT}/health`);
 });

@@ -1,0 +1,243 @@
+/* ═══════════════════════════════════════════════════════════
+   Wolfronix Test App — Styles
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2128;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #388bfd;
+    --green: #3fb950;
+    --red: #f85149;
+    --orange: #d29922;
+    --purple: #bc8cff;
+    --radius: 8px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+}
+
+/* ─── Config Bar ─── */
+#config-bar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.config-inner {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex: 1;
+    flex-wrap: wrap;
+}
+
+.config-field { display: flex; flex-direction: column; gap: 3px; }
+.config-field label { font-size: 10px; text-transform: uppercase; color: var(--text2); letter-spacing: 0.5px; }
+.config-field input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 6px 10px;
+    font-size: 13px;
+    width: 220px;
+}
+.config-field input:focus { outline: none; border-color: var(--accent); }
+
+.badge {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.badge-disconnected { background: rgba(248,81,73,0.15); color: var(--red); }
+.badge-connected { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge-degraded { background: rgba(210,153,34,0.15); color: var(--orange); }
+
+/* ─── Buttons ─── */
+button {
+    background: var(--accent2);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+}
+button:hover { background: var(--accent); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-danger { background: var(--red); }
+.btn-danger:hover { background: #da3633; }
+
+/* ─── Nav ─── */
+#main-nav {
+    display: flex;
+    gap: 2px;
+    padding: 12px 20px 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.nav-btn {
+    background: transparent;
+    color: var(--text2);
+    padding: 10px 18px;
+    border-radius: var(--radius) var(--radius) 0 0;
+    font-size: 14px;
+    border-bottom: 2px solid transparent;
+}
+.nav-btn.active { color: var(--text); border-bottom-color: var(--accent); background: var(--surface2); }
+.nav-btn:hover { color: var(--text); background: var(--surface2); }
+
+/* ─── Tabs ─── */
+.tab { display: none; padding: 20px; max-width: 800px; margin: 0 auto; }
+.tab.active { display: block; }
+
+/* ─── Cards ─── */
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+}
+.card h2 { font-size: 16px; margin-bottom: 4px; }
+.card .desc { font-size: 12px; color: var(--text2); margin-bottom: 12px; }
+
+/* ─── Forms ─── */
+.form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input[type="email"],
+input[type="password"],
+input[type="text"],
+input[type="file"],
+select,
+textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    flex: 1;
+    min-width: 150px;
+}
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+textarea { resize: vertical; width: 100%; margin-bottom: 8px; }
+select { cursor: pointer; }
+
+/* ─── Info Grid ─── */
+.info-grid {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 6px 12px;
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+.info-grid span:nth-child(odd) { color: var(--text2); }
+
+/* ─── Result Boxes ─── */
+.result-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin-top: 12px;
+    font-family: 'Consolas', 'SF Mono', monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.result-box.success { border-color: var(--green); }
+.result-box.error { border-color: var(--red); color: var(--red); }
+
+/* ─── File List ─── */
+.file-list { margin-top: 12px; }
+.file-list .placeholder { color: var(--text2); font-size: 13px; font-style: italic; }
+.file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+.file-item .file-name { font-weight: 600; }
+.file-item .file-meta { color: var(--text2); font-size: 11px; }
+.file-item-actions { display: flex; gap: 6px; }
+.file-item-actions button { padding: 4px 10px; font-size: 11px; }
+.file-item-actions .btn-delete { background: transparent; border: 1px solid var(--red); color: var(--red); }
+.file-item-actions .btn-delete:hover { background: rgba(248,81,73,0.15); }
+
+/* ─── Log ─── */
+.log-container {
+    margin-top: 12px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+.log-entry {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-family: 'Consolas', 'SF Mono', monospace;
+}
+.log-entry .log-time { color: var(--text2); margin-right: 8px; }
+.log-entry .log-method { font-weight: 700; margin-right: 6px; }
+.log-entry .log-method.POST { color: var(--green); }
+.log-entry .log-method.GET { color: var(--accent); }
+.log-entry .log-method.DELETE { color: var(--red); }
+.log-entry .log-url { color: var(--purple); }
+.log-entry .log-status { margin-left: 8px; font-weight: 600; }
+.log-entry .log-status.ok { color: var(--green); }
+.log-entry .log-status.err { color: var(--red); }
+.log-entry .log-body {
+    margin-top: 4px;
+    color: var(--text2);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 100px;
+    overflow: hidden;
+}
+
+/* ─── Spinner ─── */
+.spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Responsive ─── */
+@media (max-width: 600px) {
+    .config-field input { width: 160px; }
+    .form-row { flex-direction: column; align-items: stretch; }
+}

@@ -20,35 +20,68 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 4001;
 const CONNECTOR_API_KEY = process.env.CONNECTOR_API_KEY;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-  console.error('❌ SUPABASE_URL and SUPABASE_SERVICE_KEY are required');
-  process.exit(1);
+// Default Supabase connection (used when no per-request config is provided)
+const DEFAULT_SUPABASE_URL = process.env.SUPABASE_URL;
+const DEFAULT_SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
+
+let defaultSupabase = null;
+if (DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_KEY) {
+  defaultSupabase = createClient(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_KEY);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+// Client cache: avoid recreating Supabase clients on every request
+const clientCache = new Map();
+function getSupabaseClient(url, serviceKey) {
+  const cacheKey = `${url}::${serviceKey.slice(0, 8)}`;
+  if (clientCache.has(cacheKey)) return clientCache.get(cacheKey);
+  const client = createClient(url, serviceKey);
+  clientCache.set(cacheKey, client);
+  return client;
+}
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Auth middleware — verify X-Wolfronix-API-Key
-function authenticate(req, res, next) {
-  if (CONNECTOR_API_KEY && req.headers['x-wolfronix-api-key'] !== CONNECTOR_API_KEY) {
+// Resolve Supabase client per-request: dynamic config from X-Wolfronix-API-Key
+// or fallback to default env config
+function resolveSupabase(req, res, next) {
+  const apiKeyHeader = req.headers['x-wolfronix-api-key'] || '';
+
+  // Try parsing as JSON (dynamic per-client config from engine)
+  if (apiKeyHeader.startsWith('{')) {
+    try {
+      const dbConfig = JSON.parse(apiKeyHeader);
+      if (dbConfig.supabase_url && dbConfig.supabase_service_key) {
+        req.supabase = getSupabaseClient(dbConfig.supabase_url, dbConfig.supabase_service_key);
+        return next();
+      }
+    } catch (e) { /* not JSON, treat as static key */ }
+  }
+
+  // Static API key auth
+  if (CONNECTOR_API_KEY && apiKeyHeader !== CONNECTOR_API_KEY) {
     return res.status(401).json({ error: 'Invalid API key' });
   }
+
+  // Use default Supabase connection
+  if (!defaultSupabase) {
+    return res.status(503).json({ error: 'No Supabase configuration available' });
+  }
+  req.supabase = defaultSupabase;
   next();
 }
-app.use('/wolfronix', authenticate);
+app.use('/wolfronix', resolveSupabase);
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
   try {
-    const { error } = await supabase.from('wolfronix_files').select('id').limit(1);
+    const sb = defaultSupabase;
+    if (!sb) return res.json({ status: 'healthy', database: 'dynamic-only', connector: 'supabase' });
+    const { error } = await sb.from('wolfronix_files').select('id').limit(1);
     res.json({ status: 'healthy', database: error ? 'error' : 'connected', connector: 'supabase' });
   } catch (e) {
     res.status(500).json({ status: 'unhealthy', error: e.message });
@@ -62,6 +95,7 @@ app.get('/health', async (req, res) => {
 // POST /wolfronix/files — Store file metadata
 app.post('/wolfronix/files', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const { filename, file_size, key_part_a, key_part_b, iv, enc_time_ms, client_id, user_id, storage_type } = req.body;
 
     const { data, error } = await supabase
@@ -84,6 +118,7 @@ app.post('/wolfronix/files', async (req, res) => {
 // POST /wolfronix/files/upload — Store metadata + encrypted file data (multipart)
 app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req, res) => {
   try {
+    const supabase = req.supabase;
     const metadata = JSON.parse(req.body.metadata);
     const encryptedData = req.file?.buffer;
 
@@ -110,8 +145,7 @@ app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req,
 
     if (fileErr) throw fileErr;
 
-    // Insert encrypted data
-    // Supabase doesn't support raw bytea via REST easily, so we base64 encode
+    // Insert encrypted data (base64 for Supabase REST compatibility)
     const { error: dataErr } = await supabase
       .from('wolfronix_file_data')
       .insert({
@@ -120,7 +154,6 @@ app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req,
       });
 
     if (dataErr) {
-      // Rollback metadata
       await supabase.from('wolfronix_files').delete().eq('id', fileRow.id);
       throw dataErr;
     }
@@ -135,6 +168,7 @@ app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req,
 // GET /wolfronix/files/:id — Get file metadata
 app.get('/wolfronix/files/:id', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
@@ -146,7 +180,6 @@ app.get('/wolfronix/files/:id', async (req, res) => {
 
     if (error || !data) return res.status(404).json({ error: 'File not found' });
 
-    // Verify ownership
     if (data.user_id !== userId || data.client_id !== clientId) {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -161,10 +194,10 @@ app.get('/wolfronix/files/:id', async (req, res) => {
 // GET /wolfronix/files/:id/data — Get encrypted file data (raw bytes)
 app.get('/wolfronix/files/:id/data', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
-    // Verify ownership first
     const { data: fileMeta, error: metaErr } = await supabase
       .from('wolfronix_files')
       .select('user_id, client_id')
@@ -176,7 +209,6 @@ app.get('/wolfronix/files/:id/data', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Get encrypted data
     const { data, error } = await supabase
       .from('wolfronix_file_data')
       .select('encrypted_data')
@@ -198,6 +230,7 @@ app.get('/wolfronix/files/:id/data', async (req, res) => {
 // GET /wolfronix/files?user_id=X — List files for a user
 app.get('/wolfronix/files', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const userId = req.query.user_id || req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
@@ -221,10 +254,10 @@ app.get('/wolfronix/files', async (req, res) => {
 // DELETE /wolfronix/files/:id — Delete a file
 app.delete('/wolfronix/files/:id', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
-    // Verify ownership
     const { data: fileMeta, error: metaErr } = await supabase
       .from('wolfronix_files')
       .select('user_id, client_id')
@@ -236,7 +269,6 @@ app.delete('/wolfronix/files/:id', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Delete (cascade removes file_data too)
     const { error } = await supabase
       .from('wolfronix_files')
       .delete()
@@ -257,6 +289,7 @@ app.delete('/wolfronix/files/:id', async (req, res) => {
 // POST /wolfronix/keys — Store user's wrapped key
 app.post('/wolfronix/keys', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const { user_id, client_id, public_key_pem, encrypted_private_key, salt } = req.body;
 
     const { error } = await supabase
@@ -276,6 +309,7 @@ app.post('/wolfronix/keys', async (req, res) => {
 // GET /wolfronix/keys/:userId — Get user's wrapped key
 app.get('/wolfronix/keys/:userId', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const clientId = req.headers['x-client-id'];
 
     const { data, error } = await supabase
@@ -296,6 +330,7 @@ app.get('/wolfronix/keys/:userId', async (req, res) => {
 // GET /wolfronix/keys/:userId/public — Get user's public key only
 app.get('/wolfronix/keys/:userId/public', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const clientId = req.headers['x-client-id'];
 
     const { data, error } = await supabase
@@ -320,6 +355,7 @@ app.get('/wolfronix/keys/:userId/public', async (req, res) => {
 // POST /wolfronix/dev/files — Store fake/masked data for dev environments
 app.post('/wolfronix/dev/files', async (req, res) => {
   try {
+    const supabase = req.supabase;
     const { prod_file_id, filename, fake_data } = req.body;
 
     const { data, error } = await supabase
@@ -343,6 +379,6 @@ app.post('/wolfronix/dev/files', async (req, res) => {
 // ─── Start Server ────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🔌 Wolfronix Supabase Connector running on port ${PORT}`);
-  console.log(`   Supabase URL: ${SUPABASE_URL}`);
+  console.log(`   Mode: ${defaultSupabase ? 'Default + Dynamic' : 'Dynamic-only (per-request config)'}`);
   console.log(`   Health check: http://localhost:${PORT}/health`);
 });

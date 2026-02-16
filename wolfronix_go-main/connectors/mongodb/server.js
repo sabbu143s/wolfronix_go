@@ -3,6 +3,10 @@
  * 
  * Bridges Wolfronix Engine ↔ MongoDB (local or Atlas)
  * Implements all required endpoints for file storage, key management, and dev data.
+ * 
+ * Supports two modes:
+ *   1. Dynamic config — engine passes JSON db_config via X-Wolfronix-API-Key header
+ *   2. Static config  — uses DEFAULT_MONGODB_URI env var + CONNECTOR_API_KEY for auth
  */
 
 require('dotenv').config();
@@ -15,14 +19,9 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 4002;
 const CONNECTOR_API_KEY = process.env.CONNECTOR_API_KEY;
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-  console.error('❌ MONGODB_URI is required');
-  process.exit(1);
-}
+const DEFAULT_MONGODB_URI = process.env.DEFAULT_MONGODB_URI || process.env.MONGODB_URI;
 
 // ─── Mongoose Schemas ────────────────────────────────────────────────────────
 const fileSchema = new mongoose.Schema({
@@ -61,29 +60,93 @@ const devFileSchema = new mongoose.Schema({
   created_at:   { type: Date, default: Date.now }
 });
 
-const WolfronixFile     = mongoose.model('WolfronixFile', fileSchema);
-const WolfronixFileData = mongoose.model('WolfronixFileData', fileDataSchema);
-const WolfronixKey      = mongoose.model('WolfronixKey', keySchema);
-const WolfronixDevFile  = mongoose.model('WolfronixDevFile', devFileSchema);
+// ─── Connection Cache ────────────────────────────────────────────────────────
+// Maps MongoDB URI → { connection, models }
+const connectionCache = new Map();
+
+function getModelsForConnection(conn) {
+  return {
+    WolfronixFile:     conn.model('WolfronixFile', fileSchema),
+    WolfronixFileData: conn.model('WolfronixFileData', fileDataSchema),
+    WolfronixKey:      conn.model('WolfronixKey', keySchema),
+    WolfronixDevFile:  conn.model('WolfronixDevFile', devFileSchema),
+  };
+}
+
+async function resolveConnection(uri) {
+  if (connectionCache.has(uri)) {
+    const cached = connectionCache.get(uri);
+    if (cached.connection.readyState === 1) return cached;
+    connectionCache.delete(uri);
+  }
+  const connection = mongoose.createConnection(uri);
+  await connection.asPromise();
+  const models = getModelsForConnection(connection);
+  const entry = { connection, models };
+  connectionCache.set(uri, entry);
+  return entry;
+}
+
+// Default connection models (global mongoose)
+let defaultModels = null;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-function authenticate(req, res, next) {
-  if (CONNECTOR_API_KEY && req.headers['x-wolfronix-api-key'] !== CONNECTOR_API_KEY) {
+/**
+ * resolveMongoDB — replaces simple authenticate middleware.
+ * 
+ * 1. Try to parse X-Wolfronix-API-Key as JSON → extract mongodb_uri → create/cache connection
+ * 2. Fallback: validate as static API key → use default connection
+ * 3. Attach req.db = { WolfronixFile, WolfronixFileData, WolfronixKey, WolfronixDevFile }
+ */
+async function resolveMongoDB(req, res, next) {
+  const apiKey = req.headers['x-wolfronix-api-key'];
+
+  // Mode 1: Dynamic config from engine (JSON in header)
+  if (apiKey && apiKey.startsWith('{')) {
+    try {
+      const config = JSON.parse(apiKey);
+      const uri = config.mongodb_uri;
+      if (!uri) return res.status(400).json({ error: 'mongodb_uri required in config' });
+
+      const { models } = await resolveConnection(uri);
+      req.db = models;
+      return next();
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        // Not JSON — fall through to static auth
+      } else {
+        console.error('MongoDB dynamic connection error:', e.message);
+        return res.status(500).json({ error: 'Failed to connect to MongoDB: ' + e.message });
+      }
+    }
+  }
+
+  // Mode 2: Static API key auth → use default connection
+  if (CONNECTOR_API_KEY && apiKey !== CONNECTOR_API_KEY) {
     return res.status(401).json({ error: 'Invalid API key' });
   }
+
+  if (!defaultModels) {
+    return res.status(503).json({ error: 'No default MongoDB connection configured' });
+  }
+
+  req.db = defaultModels;
   next();
 }
-app.use('/wolfronix', authenticate);
+
+app.use('/wolfronix', resolveMongoDB);
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  const state = mongoose.connection.readyState;
+  const defaultState = mongoose.connection.readyState;
+  const dynamicConnections = connectionCache.size;
   res.json({
-    status: state === 1 ? 'healthy' : 'unhealthy',
-    database: state === 1 ? 'connected' : 'disconnected',
+    status: defaultState === 1 || dynamicConnections > 0 ? 'healthy' : 'waiting',
+    default_db: defaultState === 1 ? 'connected' : (DEFAULT_MONGODB_URI ? 'disconnected' : 'not_configured'),
+    dynamic_connections: dynamicConnections,
     connector: 'mongodb'
   });
 });
@@ -95,7 +158,7 @@ app.get('/health', (req, res) => {
 // POST /wolfronix/files — Store file metadata
 app.post('/wolfronix/files', async (req, res) => {
   try {
-    const doc = await WolfronixFile.create(req.body);
+    const doc = await req.db.WolfronixFile.create(req.body);
     res.status(201).json({ id: doc._id });
   } catch (e) {
     console.error('POST /wolfronix/files error:', e.message);
@@ -110,12 +173,12 @@ app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req,
     const encryptedData = req.file?.buffer;
     if (!encryptedData) return res.status(400).json({ error: 'Missing encrypted_data file' });
 
-    const doc = await WolfronixFile.create(metadata);
+    const doc = await req.db.WolfronixFile.create(metadata);
 
     try {
-      await WolfronixFileData.create({ file_id: doc._id, encrypted_data: encryptedData });
+      await req.db.WolfronixFileData.create({ file_id: doc._id, encrypted_data: encryptedData });
     } catch (dataErr) {
-      await WolfronixFile.deleteOne({ _id: doc._id });
+      await req.db.WolfronixFile.deleteOne({ _id: doc._id });
       throw dataErr;
     }
 
@@ -132,7 +195,7 @@ app.get('/wolfronix/files/:id', async (req, res) => {
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
-    const doc = await WolfronixFile.findById(req.params.id).lean();
+    const doc = await req.db.WolfronixFile.findById(req.params.id).lean();
     if (!doc) return res.status(404).json({ error: 'File not found' });
     if (doc.user_id !== userId || doc.client_id !== clientId) {
       return res.status(403).json({ error: 'Access denied' });
@@ -151,13 +214,13 @@ app.get('/wolfronix/files/:id/data', async (req, res) => {
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
-    const fileMeta = await WolfronixFile.findById(req.params.id).lean();
+    const fileMeta = await req.db.WolfronixFile.findById(req.params.id).lean();
     if (!fileMeta) return res.status(404).json({ error: 'File not found' });
     if (fileMeta.user_id !== userId || fileMeta.client_id !== clientId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const fileData = await WolfronixFileData.findOne({ file_id: req.params.id });
+    const fileData = await req.db.WolfronixFileData.findOne({ file_id: req.params.id });
     if (!fileData) return res.status(404).json({ error: 'File data not found' });
 
     res.set('Content-Type', 'application/octet-stream');
@@ -176,7 +239,7 @@ app.get('/wolfronix/files', async (req, res) => {
     const clientId = req.headers['x-client-id'];
     if (!userId) return res.status(400).json({ error: 'user_id is required' });
 
-    const docs = await WolfronixFile.find({ client_id: clientId, user_id: userId })
+    const docs = await req.db.WolfronixFile.find({ client_id: clientId, user_id: userId })
       .sort({ created_at: -1 }).lean();
 
     res.json(docs.map(d => ({ ...d, id: d._id })));
@@ -192,14 +255,14 @@ app.delete('/wolfronix/files/:id', async (req, res) => {
     const userId = req.headers['x-user-id'];
     const clientId = req.headers['x-client-id'];
 
-    const doc = await WolfronixFile.findById(req.params.id).lean();
+    const doc = await req.db.WolfronixFile.findById(req.params.id).lean();
     if (!doc) return res.status(404).json({ error: 'File not found' });
     if (doc.user_id !== userId || doc.client_id !== clientId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    await WolfronixFileData.deleteOne({ file_id: req.params.id });
-    await WolfronixFile.deleteOne({ _id: req.params.id });
+    await req.db.WolfronixFileData.deleteOne({ file_id: req.params.id });
+    await req.db.WolfronixFile.deleteOne({ _id: req.params.id });
     res.status(204).send();
   } catch (e) {
     console.error('DELETE /wolfronix/files/:id error:', e.message);
@@ -215,7 +278,7 @@ app.delete('/wolfronix/files/:id', async (req, res) => {
 app.post('/wolfronix/keys', async (req, res) => {
   try {
     const { user_id, client_id, public_key_pem, encrypted_private_key, salt } = req.body;
-    await WolfronixKey.findOneAndUpdate(
+    await req.db.WolfronixKey.findOneAndUpdate(
       { user_id, client_id },
       { public_key_pem, encrypted_private_key, salt },
       { upsert: true, new: true }
@@ -231,7 +294,7 @@ app.post('/wolfronix/keys', async (req, res) => {
 app.get('/wolfronix/keys/:userId', async (req, res) => {
   try {
     const clientId = req.headers['x-client-id'];
-    const doc = await WolfronixKey.findOne({ user_id: req.params.userId, client_id: clientId }).lean();
+    const doc = await req.db.WolfronixKey.findOne({ user_id: req.params.userId, client_id: clientId }).lean();
     if (!doc) return res.status(404).json({ error: 'User key not found' });
     res.json(doc);
   } catch (e) {
@@ -244,7 +307,7 @@ app.get('/wolfronix/keys/:userId', async (req, res) => {
 app.get('/wolfronix/keys/:userId/public', async (req, res) => {
   try {
     const clientId = req.headers['x-client-id'];
-    const doc = await WolfronixKey.findOne({ user_id: req.params.userId, client_id: clientId })
+    const doc = await req.db.WolfronixKey.findOne({ user_id: req.params.userId, client_id: clientId })
       .select('public_key_pem').lean();
     if (!doc) return res.status(404).json({ error: 'User not found' });
     res.json({ public_key_pem: doc.public_key_pem });
@@ -262,7 +325,7 @@ app.get('/wolfronix/keys/:userId/public', async (req, res) => {
 app.post('/wolfronix/dev/files', async (req, res) => {
   try {
     const { prod_file_id, filename, fake_data } = req.body;
-    const doc = await WolfronixDevFile.create({
+    const doc = await req.db.WolfronixDevFile.create({
       prod_file_id, filename, fake_data: Buffer.from(fake_data)
     });
     res.status(201).json({ id: doc._id });
@@ -273,13 +336,33 @@ app.post('/wolfronix/dev/files', async (req, res) => {
 });
 
 // ─── Connect & Start ─────────────────────────────────────────────────────────
-mongoose.connect(MONGODB_URI).then(() => {
-  console.log('✅ Connected to MongoDB');
+async function start() {
+  if (DEFAULT_MONGODB_URI) {
+    try {
+      await mongoose.connect(DEFAULT_MONGODB_URI);
+      console.log('✅ Connected to default MongoDB');
+      defaultModels = {
+        WolfronixFile:     mongoose.model('WolfronixFile', fileSchema),
+        WolfronixFileData: mongoose.model('WolfronixFileData', fileDataSchema),
+        WolfronixKey:      mongoose.model('WolfronixKey', keySchema),
+        WolfronixDevFile:  mongoose.model('WolfronixDevFile', devFileSchema),
+      };
+    } catch (err) {
+      console.warn('⚠️  Default MongoDB connection failed:', err.message);
+      console.warn('   Running in dynamic-config-only mode');
+    }
+  } else {
+    console.log('ℹ️  No DEFAULT_MONGODB_URI set — running in dynamic-config-only mode');
+  }
+
   app.listen(PORT, () => {
     console.log(`🔌 Wolfronix MongoDB Connector running on port ${PORT}`);
+    console.log(`   Mode: ${defaultModels ? 'static + dynamic' : 'dynamic-only'}`);
     console.log(`   Health check: http://localhost:${PORT}/health`);
   });
-}).catch(err => {
-  console.error('❌ MongoDB connection failed:', err.message);
+}
+
+start().catch(err => {
+  console.error('❌ MongoDB connector startup failed:', err.message);
   process.exit(1);
 });

@@ -784,6 +784,8 @@ func registerClientHandler(w http.ResponseWriter, r *http.Request) {
 // === ENTERPRISE CLIENT MANAGEMENT ===
 
 // registerEnterpriseClientHandler registers a client with their API endpoint
+// Supports managed connectors via db_type + db_config (auto-routed inside Docker)
+// or custom_api mode with explicit api_endpoint
 func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 	if clientRegistry == nil {
 		http.Error(w, "Client registry not initialized", 503)
@@ -793,8 +795,10 @@ func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ClientID    string `json:"client_id"`
 		ClientName  string `json:"client_name"`
-		APIEndpoint string `json:"api_endpoint"` // Client's storage API URL
-		APIKey      string `json:"api_key"`      // Key to call client's API
+		APIEndpoint string `json:"api_endpoint"` // Client's storage API URL (optional if db_type is managed)
+		APIKey      string `json:"api_key"`      // Key to call client's API (optional if db_type is managed)
+		DBType      string `json:"db_type"`      // supabase, mongodb, mysql, firebase, postgresql, custom_api
+		DBConfig    string `json:"db_config"`    // JSON string with DB credentials
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -802,9 +806,52 @@ func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.ClientID == "" || req.ClientName == "" || req.APIEndpoint == "" {
-		http.Error(w, "client_id, client_name, and api_endpoint are required", 400)
+	if req.ClientID == "" || req.ClientName == "" {
+		http.Error(w, `{"error": "client_id and client_name are required"}`, 400)
 		return
+	}
+
+	// Validate db_type
+	validDBTypes := map[string]bool{
+		clientdb.DBTypeSupabase:   true,
+		clientdb.DBTypeMongoDB:    true,
+		clientdb.DBTypeMySQL:      true,
+		clientdb.DBTypeFirebase:   true,
+		clientdb.DBTypePostgreSQL: true,
+		clientdb.DBTypeCustomAPI:  true,
+		"":                        true, // backward compat — treated as custom_api
+	}
+
+	if !validDBTypes[req.DBType] {
+		http.Error(w, `{"error": "Invalid db_type. Must be: supabase, mongodb, mysql, firebase, postgresql, or custom_api"}`, 400)
+		return
+	}
+
+	// For managed connectors, db_config is required; api_endpoint is auto-set
+	isManaged := req.DBType != "" && req.DBType != clientdb.DBTypeCustomAPI
+	if isManaged {
+		if req.DBConfig == "" {
+			http.Error(w, `{"error": "db_config is required for managed connector types"}`, 400)
+			return
+		}
+		// Validate db_config is valid JSON
+		var configCheck map[string]interface{}
+		if err := json.Unmarshal([]byte(req.DBConfig), &configCheck); err != nil {
+			http.Error(w, `{"error": "db_config must be valid JSON"}`, 400)
+			return
+		}
+	} else {
+		// custom_api or empty → require api_endpoint
+		if req.APIEndpoint == "" {
+			http.Error(w, `{"error": "api_endpoint is required for custom_api db_type"}`, 400)
+			return
+		}
+		// Validate api_endpoint to prevent SSRF
+		parsedURL, err := url.Parse(req.APIEndpoint)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+			http.Error(w, `{"error": "api_endpoint must be a valid http/https URL"}`, 400)
+			return
+		}
 	}
 
 	// Generate Wolfronix API key for this client (cryptographically random)
@@ -815,11 +862,10 @@ func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	wolfronixKey := hex.EncodeToString(keyBytes)
 
-	// Validate api_endpoint to prevent SSRF
-	parsedURL, err := url.Parse(req.APIEndpoint)
-	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
-		http.Error(w, `{"error": "api_endpoint must be a valid http/https URL"}`, 400)
-		return
+	// Default db_type to custom_api for backward compat
+	dbType := req.DBType
+	if dbType == "" {
+		dbType = clientdb.DBTypeCustomAPI
 	}
 
 	client := &clientdb.RegisteredClient{
@@ -828,6 +874,8 @@ func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 		APIEndpoint:  req.APIEndpoint,
 		APIKey:       req.APIKey,
 		WolfronixKey: wolfronixKey,
+		DBType:       dbType,
+		DBConfig:     req.DBConfig,
 	}
 
 	if err := clientRegistry.RegisterClient(client); err != nil {
@@ -836,14 +884,24 @@ func registerEnterpriseClientHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// Build response
+	resp := map[string]interface{}{
 		"status":        "success",
 		"client_id":     client.ClientID,
 		"wolfronix_key": wolfronixKey,
-		"message":       "Client registered. Use wolfronix_key for API calls.",
-	})
-	log.Printf("✅ Enterprise client registered: %s → %s", client.ClientID, client.APIEndpoint)
+		"db_type":       dbType,
+	}
+	if isManaged {
+		resp["message"] = "Client registered with managed " + dbType + " connector. Use wolfronix_key for API calls."
+		resp["connector"] = "auto-routed (internal Docker network)"
+	} else {
+		resp["message"] = "Client registered. Use wolfronix_key for API calls."
+		resp["api_endpoint"] = client.APIEndpoint
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+	log.Printf("✅ Enterprise client registered: %s (db_type=%s)", client.ClientID, dbType)
 }
 
 // listEnterpriseClientsHandler lists all registered enterprise clients
