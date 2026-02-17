@@ -67,6 +67,40 @@ async function api(method, endpoint, body, isFormData = false) {
     return data;
 }
 
+// Raw fetch that returns blob + filename (for decrypt endpoint)
+async function fetchRaw(method, endpoint, body) {
+    const url = config.baseUrl + endpoint;
+    const headers = {};
+    if (config.wolfronixKey) headers['X-Wolfronix-Key'] = config.wolfronixKey;
+    if (config.clientId) headers['X-Client-ID'] = config.clientId;
+    if (auth.userId) headers['X-User-ID'] = auth.userId;
+    headers['Content-Type'] = 'application/json';
+
+    const response = await fetch(url, { method, headers, body: JSON.stringify(body) });
+
+    if (!response.ok) {
+        let errMsg = `HTTP ${response.status}`;
+        try { const j = await response.json(); errMsg = j.error || errMsg; } catch {}
+        addLog(method, endpoint, response.status, 0, body, { error: errMsg });
+        throw new Error(errMsg);
+    }
+
+    // Extract filename from headers
+    let filename = '';
+    const origName = response.headers.get('X-Original-Filename');
+    if (origName) {
+        filename = origName;
+    } else {
+        const disp = response.headers.get('Content-Disposition') || '';
+        const match = disp.match(/filename="?([^";\n]+)"?/);
+        if (match) filename = match[1];
+    }
+
+    const blob = await response.blob();
+    addLog(method, endpoint, response.status, 0, body, { size: blob.size, filename });
+    return { blob, filename };
+}
+
 // ─── Connect / Health Check ───
 async function initClient() {
     // Default to same origin if no URL entered (when served from nginx)
@@ -256,6 +290,10 @@ async function doDecrypt() {
     await doDecryptById(fileId);
 }
 
+// Current preview state for download
+let currentPreviewBlob = null;
+let currentPreviewName = '';
+
 async function doDecryptById(fileId) {
     requireAuth();
     if (!window._keys?.privateKey) return alert('No private key loaded. Please login first.');
@@ -275,27 +313,133 @@ async function doDecryptById(fileId) {
         const decryptedKeyA = bytesToBase64(new Uint8Array(decKeyBytes));
 
         // Step 3: Send decrypted key back → get file
-        const blob = await api('POST', `/api/v1/files/${fileId}/decrypt`, {
+        const decryptResp = await fetchRaw('POST', `/api/v1/files/${fileId}/decrypt`, {
             decrypted_key_a: decryptedKeyA,
             user_role: 'owner'
         });
 
-        // Download the file
-        if (blob instanceof Blob) {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `decrypted_${fileId}`;
-            a.click();
-            URL.revokeObjectURL(url);
+        // Extract filename from response headers
+        const origFilename = decryptResp.filename || `decrypted_${fileId}`;
+        const blob = decryptResp.blob;
+
+        // Show in preview panel instead of downloading
+        if (blob) {
+            currentPreviewBlob = blob;
+            currentPreviewName = origFilename;
+            showPreview(blob, fileId);
         }
 
         clearBusy();
-        showToast('File decrypted & downloaded!', 'success');
+        showToast('File decrypted successfully!', 'success');
     } catch (e) {
         clearBusy();
         showToast('Decrypt failed: ' + e.message, 'error');
     }
+}
+
+// ─── Preview Panel ───
+function showPreview(blob, fileId) {
+    const card = document.getElementById('previewCard');
+    const content = document.getElementById('previewContent');
+    const title = document.getElementById('previewTitle');
+
+    title.textContent = `Decrypted File #${fileId}`;
+    content.innerHTML = '';
+    card.style.display = 'block';
+
+    const type = blob.type || '';
+    const name = currentPreviewName.toLowerCase();
+
+    // Image
+    if (type.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/i.test(name)) {
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(blob);
+        img.className = 'preview-image';
+        img.onload = () => URL.revokeObjectURL(img.src);
+        content.appendChild(img);
+        return;
+    }
+
+    // PDF
+    if (type === 'application/pdf' || name.endsWith('.pdf')) {
+        const iframe = document.createElement('iframe');
+        iframe.src = URL.createObjectURL(blob);
+        iframe.className = 'preview-pdf';
+        content.appendChild(iframe);
+        return;
+    }
+
+    // Video
+    if (type.startsWith('video/') || /\.(mp4|webm|ogg|mov)$/i.test(name)) {
+        const video = document.createElement('video');
+        video.src = URL.createObjectURL(blob);
+        video.controls = true;
+        video.className = 'preview-video';
+        content.appendChild(video);
+        return;
+    }
+
+    // Audio
+    if (type.startsWith('audio/') || /\.(mp3|wav|ogg|flac|m4a)$/i.test(name)) {
+        const audio = document.createElement('audio');
+        audio.src = URL.createObjectURL(blob);
+        audio.controls = true;
+        audio.className = 'preview-audio';
+        content.appendChild(audio);
+        return;
+    }
+
+    // Text / JSON / CSV / code (anything readable)
+    if (type.startsWith('text/') || type.includes('json') || type.includes('xml') ||
+        /\.(txt|csv|json|xml|html|css|js|ts|md|log|yaml|yml|env|sql|py|go|java|c|cpp|h|sh|bat|ini|cfg|toml)$/i.test(name) ||
+        blob.size < 2 * 1024 * 1024) {
+        // Try reading as text (for small files or known text types)
+        blob.text().then(text => {
+            // Check if it looks like binary (lots of null bytes)
+            const nullCount = (text.match(/\0/g) || []).length;
+            if (nullCount > text.length * 0.1) {
+                showBinaryPreview(content, blob);
+                return;
+            }
+            const pre = document.createElement('pre');
+            pre.className = 'preview-text';
+            pre.textContent = text;
+            content.appendChild(pre);
+        }).catch(() => showBinaryPreview(content, blob));
+        return;
+    }
+
+    // Binary fallback
+    showBinaryPreview(content, blob);
+}
+
+function showBinaryPreview(container, blob) {
+    container.innerHTML = `
+        <div class="preview-binary">
+            <div class="preview-binary-icon">📄</div>
+            <div>Binary file · ${formatBytes(blob.size)}</div>
+            <div class="preview-binary-type">${blob.type || 'unknown type'}</div>
+            <button onclick="downloadPreview()" style="margin-top:12px">⬇ Download File</button>
+        </div>
+    `;
+}
+
+function downloadPreview() {
+    if (!currentPreviewBlob) return;
+    const url = URL.createObjectURL(currentPreviewBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = currentPreviewName;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Download started', 'success');
+}
+
+function closePreview() {
+    document.getElementById('previewCard').style.display = 'none';
+    document.getElementById('previewContent').innerHTML = '';
+    currentPreviewBlob = null;
+    currentPreviewName = '';
 }
 
 // ─── Files: Delete ───

@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -195,8 +196,8 @@ func main() {
 	srv := &http.Server{
 		Addr:         port,
 		Handler:      r,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		ReadTimeout:  30 * time.Minute,
+		WriteTimeout: 30 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 	}
 
@@ -232,7 +233,8 @@ func main() {
 func encryptHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	err := r.ParseMultipartForm(32 << 20)
+	// Allow files up to 4 GB (memory threshold 512MB, rest spills to temp disk)
+	err := r.ParseMultipartForm(512 << 20)
 	if err != nil {
 		log.Printf("❌ Parse form error: %v", err)
 		http.Error(w, `{"error": "File too large or parse error"}`, 400)
@@ -594,6 +596,30 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 
 	// === LAYER 2: DYNAMIC RBAC MASKING ===
 	contentType := http.DetectContentType(decData)
+
+	// Fallback: if DetectContentType returned generic octet-stream, infer from filename extension
+	if contentType == "application/octet-stream" {
+		ext := strings.ToLower(filepath.Ext(fileMeta.Filename))
+		mimeByExt := map[string]string{
+			".mp4": "video/mp4", ".webm": "video/webm", ".ogg": "video/ogg", ".mov": "video/quicktime",
+			".avi": "video/x-msvideo", ".mkv": "video/x-matroska", ".flv": "video/x-flv",
+			".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac", ".m4a": "audio/mp4",
+			".aac": "audio/aac",
+			".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+			".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".ico": "image/x-icon",
+			".pdf":  "application/pdf",
+			".json": "application/json", ".xml": "application/xml",
+			".html": "text/html", ".css": "text/css", ".js": "text/javascript",
+			".txt": "text/plain", ".csv": "text/csv", ".md": "text/markdown",
+			".zip": "application/zip", ".gz": "application/gzip",
+			".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		}
+		if m, ok := mimeByExt[ext]; ok {
+			contentType = m
+		}
+	}
+
 	isTextFile := strings.HasPrefix(contentType, "text/") ||
 		strings.HasSuffix(strings.ToLower(fileMeta.Filename), ".txt") ||
 		strings.HasSuffix(strings.ToLower(fileMeta.Filename), ".csv") ||
@@ -619,8 +645,10 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 		return r
 	}, fileMeta.Filename)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, safeFilename))
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Original-Filename", safeFilename)
 	w.Header().Set("X-Masking-Applied", userRole)
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Original-Filename, X-Masking-Applied")
 	w.Write(decData)
 
 	log.Printf("\xe2\x9c\x85 Decrypted %d bytes: %s [enterprise]", len(decData), fileMeta.Filename)

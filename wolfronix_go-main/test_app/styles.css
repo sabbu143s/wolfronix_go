@@ -193,6 +193,24 @@ select { cursor: pointer; }
 .file-item-actions .btn-delete { background: transparent; border: 1px solid var(--red); color: var(--red); }
 .file-item-actions .btn-delete:hover { background: rgba(248,81,73,0.15); }
 
+/* ─── Preview Panel ─── */
+.preview-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.preview-header h2 { margin: 0; }
+.preview-actions { display: flex; gap: 8px; }
+.preview-actions button { padding: 6px 14px; font-size: 12px; }
+.btn-close { background: transparent; border: 1px solid var(--border); color: var(--text2); }
+.btn-close:hover { border-color: var(--red); color: var(--red); }
+
+.preview-content { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #0d1117; min-height: 100px; }
+.preview-text { margin: 0; padding: 16px; font-family: 'Fira Code', 'Cascadia Code', monospace; font-size: 13px; line-height: 1.6; color: #e6edf3; white-space: pre-wrap; word-wrap: break-word; max-height: 500px; overflow-y: auto; }
+.preview-image { max-width: 100%; max-height: 600px; display: block; margin: 0 auto; padding: 16px; object-fit: contain; }
+.preview-pdf { width: 100%; height: 600px; border: none; }
+.preview-video { width: 100%; max-height: 500px; display: block; }
+.preview-audio { width: 100%; padding: 20px; display: block; }
+.preview-binary { text-align: center; padding: 40px 20px; color: var(--text2); }
+.preview-binary-icon { font-size: 48px; margin-bottom: 12px; }
+.preview-binary-type { font-size: 11px; color: var(--text2); margin-top: 4px; }
+
 /* ─── Log ─── */
 .log-container {
     margin-top: 12px;

@@ -145,12 +145,12 @@ app.post('/wolfronix/files/upload', upload.single('encrypted_data'), async (req,
 
     if (fileErr) throw fileErr;
 
-    // Insert encrypted data (base64 for Supabase REST compatibility)
+    // Insert encrypted data (hex format for PostgreSQL BYTEA compatibility)
     const { error: dataErr } = await supabase
       .from('wolfronix_file_data')
       .insert({
         file_id: fileRow.id,
-        encrypted_data: encryptedData.toString('base64')
+        encrypted_data: '\\x' + encryptedData.toString('hex')
       });
 
     if (dataErr) {
@@ -217,7 +217,16 @@ app.get('/wolfronix/files/:id/data', async (req, res) => {
 
     if (error || !data) return res.status(404).json({ error: 'File data not found' });
 
-    const buffer = Buffer.from(data.encrypted_data, 'base64');
+    // Decode BYTEA: Supabase/PostgREST returns hex format (\x...) or base64
+    let buffer;
+    const raw = data.encrypted_data;
+    if (typeof raw === 'string' && raw.startsWith('\\x')) {
+      buffer = Buffer.from(raw.slice(2), 'hex');
+    } else if (typeof raw === 'string') {
+      buffer = Buffer.from(raw, 'base64');
+    } else {
+      buffer = Buffer.from(raw);
+    }
     res.set('Content-Type', 'application/octet-stream');
     res.set('Content-Length', buffer.length);
     res.send(buffer);

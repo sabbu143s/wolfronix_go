@@ -89,11 +89,23 @@
 
         <div class="card">
             <h2>Decrypt File</h2>
-            <p class="desc">Zero-knowledge: server sends RSA-encrypted key → you decrypt client-side → send back → get file</p>
+            <p class="desc">Zero-knowledge: server sends RSA-encrypted key → you decrypt client-side → send back → view file</p>
             <div class="form-row">
                 <input type="text" id="decryptFileId" placeholder="File ID">
-                <button onclick="doDecrypt()">Decrypt & Download</button>
+                <button onclick="doDecrypt()">Decrypt & View</button>
             </div>
+        </div>
+
+        <!-- File Preview Panel -->
+        <div class="card" id="previewCard" style="display:none;">
+            <div class="preview-header">
+                <h2 id="previewTitle">Decrypted File</h2>
+                <div class="preview-actions">
+                    <button onclick="downloadPreview()">⬇ Download</button>
+                    <button class="btn-close" onclick="closePreview()">✕ Close</button>
+                </div>
+            </div>
+            <div id="previewContent" class="preview-content"></div>
         </div>
     </section>
 
