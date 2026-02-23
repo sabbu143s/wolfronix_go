@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
@@ -590,7 +591,9 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// === LAYER 3: AES-256-GCM AUTHENTICATED DECRYPTION ===
-	fullKey := append(keyA, keyB...)
+	fullKey := make([]byte, 32)
+	copy(fullKey[:16], keyA)
+	copy(fullKey[16:], keyB)
 	block, err := aes.NewCipher(fullKey)
 	if err != nil {
 		http.Error(w, `{"error": "Decryption init failed"}`, 500)
@@ -1213,7 +1216,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"status":    status,
 		"service":   "wolfronix",
-		"version":   "2.3.0",
+		"version":   "2.4.1",
 		"database":  dbStatus,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
@@ -1357,7 +1360,7 @@ func requireAdminKey(handler http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, `{"error": "Admin endpoint not configured (ADMIN_API_KEY not set)"}`, 503)
 			return
 		}
-		if key != adminAPIKey {
+		if subtle.ConstantTimeCompare([]byte(key), []byte(adminAPIKey)) != 1 {
 			http.Error(w, `{"error": "Invalid or missing X-Admin-Key"}`, 403)
 			return
 		}
