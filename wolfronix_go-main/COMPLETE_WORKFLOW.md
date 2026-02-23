@@ -1,6 +1,6 @@
 # Wolfronix — Complete System Workflow
 
-> **SDK v2.3.0** · **Engine v2** · Last updated: February 2026
+> **SDK v2.4.1** · **Engine v2** · Last updated: February 2026
 
 ## The Big Picture
 
@@ -10,7 +10,7 @@
 │                                                                                 │
 │   ┌──────────────────────┐    ┌──────────────────────────────────────────────┐  │
 │   │  @wolfronix/sdk      │    │  Your Frontend (React, Vue, etc.)           │  │
-│   │  v2.3.0              │    │  Uses SDK methods directly                  │  │
+│   │  v2.4.1              │    │  Uses SDK methods directly                  │  │
 │   │                      │    │                                              │  │
 │   │  • register()        │    │  wfx.register('email', 'pass')              │  │
 │   │  • login()           │    │  wfx.encrypt(file)                          │  │
@@ -265,7 +265,13 @@ await wfx.login('user@email.com', 'myPassword123');
      │    status: "success",
      │    file_id: 42,
      │    file_size: 1048576,
-     │    enc_time_ms: 23
+     │    enc_time_ms: 23,
+     │    timing: {
+     │      upload_ms: 1200,     ← network transfer time
+     │      read_ms: 5,          ← reading file into memory
+     │      encrypt_ms: 18,      ← AES-256-GCM encryption
+     │      store_ms: 45         ← writing to client DB
+     │    }
      │  }
 ```
 
@@ -273,12 +279,16 @@ await wfx.login('user@email.com', 'myPassword123');
 ```typescript
 // Browser
 const result = await wfx.encrypt(fileInput.files[0]);
-console.log(result.file_id); // Use this ID to decrypt later
+console.log(result.file_id);     // Use this ID to decrypt later
+console.log(result.timing);      // { upload_ms, read_ms, encrypt_ms, store_ms }
 
 // Node.js
 const buffer = fs.readFileSync('secret-document.pdf');
 const result = await wfx.encrypt(buffer, 'secret-document.pdf');
 ```
+
+> [!NOTE]
+> File uploads have **no timeout** — the SDK disables the AbortController timeout for FormData requests since large files (e.g., 3GB video) can take over an hour to upload. Regular JSON API calls still use the configured timeout.
 
 **What's stored in YOUR database (not Wolfronix's):**
 - Encrypted file blob (AES-256-GCM ciphertext — useless without the key)
@@ -849,15 +859,29 @@ When a SaaS user revokes their key, the SaaS backend deactivates the client on t
 
 ---
 
-## Complete SDK API Reference (v2.3.0)
+## Complete SDK API Reference (v2.4.1)
+
+### Installation
+
+```bash
+# Node.js / bundler
+npm install wolfronix-sdk
+
+# Browser (no bundler) — IIFE bundle
+# Build: cd sdk/javascript && npm run build:browser
+# Copy: dist/index.global.js → your project as wolfronix.browser.js
+# Usage: <script src="wolfronix.browser.js"></script>
+#        → exposes window.WolfronixSDK
+```
 
 ```typescript
 const wfx = new Wolfronix({
   baseUrl: 'https://engine:5002',   // Wolfronix Go engine URL
   clientId: 'your-client-id',       // From SaaS or manual setup
   wolfronixKey: 'wfx_your-key',     // API key for X-Wolfronix-Key
-  timeout: 30000,                    // Request timeout (ms)
-  retries: 3                         // Auto-retry with exponential backoff
+  timeout: 30000,                    // Request timeout (ms) — file uploads bypass this
+  retries: 3,                        // Auto-retry with exponential backoff
+  insecure: false                    // Set true for self-signed certs (dev only)
 });
 
 // ── Auth ──
@@ -868,7 +892,7 @@ wfx.isAuthenticated();                   // Check session status
 wfx.getUserId();                         // Get current user ID
 
 // ── File Operations ──
-await wfx.encrypt(file, filename?);        // Encrypt + store → returns file_id
+await wfx.encrypt(file, filename?);        // Encrypt + store → { file_id, timing, ... }
 await wfx.decrypt(fileId, role?);          // Zero-knowledge decrypt → Blob
 await wfx.decryptToBuffer(fileId, role?);  // Zero-knowledge decrypt → ArrayBuffer
 await wfx.getFileKey(fileId);              // Get encrypted key_part_a
@@ -963,10 +987,28 @@ cd deploy/
 docker compose -f docker-compose.prod.yml up -d
 
 # Architecture:
-#   nginx (9443) → wolfronix engine (5001 internal) → postgres (5432 internal)
+#   nginx (9443) → wolfronix engine (5001) → postgres (5432)
+#   5 managed DB connectors (supabase, mongodb, mysql, firebase, postgresql)
+#   mock_db for local testing (filesystem-based, 4 gunicorn workers)
 #   Certbot handles SSL renewal automatically
 #   WebSocket proxied via nginx (Connection: Upgrade)
 ```
+
+### Managed Database Connectors
+
+The engine auto-routes encrypted file storage to the correct connector based on each client's `db_type`:
+
+| Connector | Port | Description |
+|-----------|------|-------------|
+| `connector_supabase` | 4001 | Supabase storage (S3-compatible) |
+| `connector_mongodb` | 4002 | MongoDB GridFS |
+| `connector_mysql` | 4003 | MySQL BLOB storage |
+| `connector_firebase` | 4004 | Firebase Cloud Storage |
+| `connector_postgresql` | 4005 | PostgreSQL BYTEA/lo storage |
+| `mock_db` | 4000 | Local filesystem (Flask + gunicorn, for testing) |
+
+> [!NOTE]
+> The mock_db service uses a **file-based atomic counter** (`mock_storage/counter.txt`) with `fcntl` file locking to generate unique file IDs across all 4 gunicorn workers and container restarts.
 
 ### Environment Variables
 
@@ -978,6 +1020,8 @@ docker compose -f docker-compose.prod.yml up -d
 | `DB_PASS` | Yes | — | PostgreSQL password |
 | `DB_NAME` | Yes | `client_vault` | PostgreSQL database name |
 | `ADMIN_API_KEY` | Yes | — | Admin key for enterprise endpoints |
+| `JWT_SECRET` | Yes | — | JWT signing secret |
+| `MASTER_KEY` | Yes | — | Master encryption key |
 | `ALLOWED_ORIGINS` | No | `*` | CORS allowed origins (comma-separated) |
 | `CLIENT_DB_API_ENDPOINT` | No | — | Client's DB API URL (enterprise mode) |
 | `CLIENT_DB_API_KEY` | No | — | Client's DB API key |
@@ -993,3 +1037,31 @@ docker compose -f docker-compose.prod.yml up -d
 |---------|--------------|----------------------|----------|
 | Wolfronix Engine | 5001 | 5002 (dev), 9443 (prod via nginx) | HTTPS + WSS |
 | PostgreSQL | 5432 | 5433 (dev only) | TCP |
+| Nginx | 80/443 | 9080/9443 (prod) | HTTP/HTTPS |
+| Mock DB | 4000 | internal only | HTTP |
+| Supabase Connector | 4001 | internal only | HTTP |
+| MongoDB Connector | 4002 | internal only | HTTP |
+| MySQL Connector | 4003 | internal only | HTTP |
+| Firebase Connector | 4004 | internal only | HTTP |
+| PostgreSQL Connector | 4005 | internal only | HTTP |
+| Redis | 6379 | internal only | TCP |
+
+### Rebuilding the SDK Browser Bundle
+
+After making changes to the SDK source, rebuild the browser IIFE bundle:
+
+```bash
+cd sdk/javascript
+npm run build:browser          # → dist/index.global.js (419KB)
+cp dist/index.global.js ../../test_app/wolfronix.browser.js
+```
+
+The bundle exposes `window.WolfronixSDK` for direct use in HTML `<script>` tags (no bundler needed).
+
+### Publishing the SDK to npm
+
+```bash
+cd sdk/javascript
+npm login
+npm publish --access public    # publishes as wolfronix-sdk@<version>
+```
