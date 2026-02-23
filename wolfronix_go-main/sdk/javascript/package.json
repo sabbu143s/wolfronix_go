@@ -1,6 +1,6 @@
 {
   "name": "wolfronix-sdk",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Official Wolfronix SDK for JavaScript/TypeScript - Zero-knowledge encryption made simple",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -18,7 +18,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean && npm run build:browser",
+    "build:browser": "tsup src/index.ts --format iife --global-name WolfronixSDK --outDir dist --no-dts --minify",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "test": "vitest",
     "test:coverage": "vitest --coverage",

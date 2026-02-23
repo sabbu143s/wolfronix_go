@@ -21,13 +21,43 @@ file_metadata = {}
 print(f"🚀 Mock Client API running on port 4000")
 print(f"📂 Storage directory: {os.path.abspath(STORAGE_DIR)}")
 
-# Auto-increment file ID
-_next_file_id = {"val": 1}
+# Auto-increment file ID — uses a file-based counter so it survives:
+# 1. Container restarts (persisted to disk)
+# 2. Gunicorn multi-worker (file lock ensures atomic increment)
+COUNTER_FILE = os.path.join(STORAGE_DIR, "counter.txt")
+import fcntl
+
+def _init_counter():
+    """Initialize the counter file from existing files if it doesn't exist."""
+    if os.path.exists(COUNTER_FILE):
+        return
+    # Scan existing files to find highest ID
+    max_id = 0
+    if os.path.exists(FILES_DIR):
+        for filename in os.listdir(FILES_DIR):
+            base = filename.replace('dev_', '').split('.')[0]
+            try:
+                fid = int(base)
+                if fid > max_id:
+                    max_id = fid
+            except (ValueError, IndexError):
+                continue
+    with open(COUNTER_FILE, 'w') as f:
+        f.write(str(max_id + 1))
+    print(f"📊 Initialized counter file at {max_id + 1}")
+
+_init_counter()
 
 def _gen_file_id():
-    fid = _next_file_id["val"]
-    _next_file_id["val"] += 1
-    return fid
+    """Atomically read-and-increment the file-based counter (safe across workers)."""
+    with open(COUNTER_FILE, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)  # Exclusive lock
+        current = int(f.read().strip())
+        f.seek(0)
+        f.write(str(current + 1))
+        f.truncate()
+        fcntl.flock(f, fcntl.LOCK_UN)
+    return current
 
 @app.route('/wolfronix/files/upload', methods=['POST'])
 def upload_file():

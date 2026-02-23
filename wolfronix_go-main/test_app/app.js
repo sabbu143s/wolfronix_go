@@ -1,13 +1,12 @@
 /* ═══════════════════════════════════════════════════════════
    Wolfronix Test App — Application Logic
    
-   This talks directly to the Wolfronix REST API.
-   No SDK build step needed — pure browser JS.
+   Uses the official @wolfronix/sdk (loaded via wolfronix.browser.js)
+   All crypto and API calls go through the SDK.
    ═══════════════════════════════════════════════════════════ */
 
 // ─── State ───
-let config = { baseUrl: '', clientId: '', wolfronixKey: '' };
-let auth = { userId: null, loggedIn: false };
+let wfx = null;       // Wolfronix SDK instance
 let lastEncryptedMsg = null; // for quick decrypt
 
 // ─── Tab Navigation ───
@@ -20,104 +19,35 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     });
 });
 
-// ─── API Helper ───
-async function api(method, endpoint, body, isFormData = false) {
-    const url = config.baseUrl + endpoint;
-    const headers = {};
-
-    if (config.wolfronixKey) headers['X-Wolfronix-Key'] = config.wolfronixKey;
-    if (config.clientId) headers['X-Client-ID'] = config.clientId;
-    if (auth.userId) headers['X-User-ID'] = auth.userId;
-    if (body && !isFormData) headers['Content-Type'] = 'application/json';
-
-    const opts = { method, headers };
-    if (body) {
-        opts.body = isFormData ? body : JSON.stringify(body);
-    }
-
-    const startTime = Date.now();
-    let response, data, error;
-
-    try {
-        response = await fetch(url, opts);
-        const contentType = response.headers.get('content-type') || '';
-
-        if (contentType.includes('application/json')) {
-            data = await response.json();
-        } else if (contentType.includes('octet-stream') || contentType.includes('application/')) {
-            data = await response.blob();
-        } else {
-            const text = await response.text();
-            try { data = JSON.parse(text); } catch { data = text; }
-        }
-
-        if (!response.ok) {
-            error = (data && data.error) || (data && typeof data === 'string' ? data : `HTTP ${response.status}`);
-        }
-    } catch (e) {
-        error = e.message;
-    }
-
-    const elapsed = Date.now() - startTime;
-
-    // Log
-    addLog(method, endpoint, response?.status, elapsed, body && !isFormData ? body : null, error ? { error } : data);
-
-    if (error) throw new Error(error);
-    return data;
-}
-
-// Raw fetch that returns blob + filename (for decrypt endpoint)
-async function fetchRaw(method, endpoint, body) {
-    const url = config.baseUrl + endpoint;
-    const headers = {};
-    if (config.wolfronixKey) headers['X-Wolfronix-Key'] = config.wolfronixKey;
-    if (config.clientId) headers['X-Client-ID'] = config.clientId;
-    if (auth.userId) headers['X-User-ID'] = auth.userId;
-    headers['Content-Type'] = 'application/json';
-
-    const response = await fetch(url, { method, headers, body: JSON.stringify(body) });
-
-    if (!response.ok) {
-        let errMsg = `HTTP ${response.status}`;
-        try { const j = await response.json(); errMsg = j.error || errMsg; } catch {}
-        addLog(method, endpoint, response.status, 0, body, { error: errMsg });
-        throw new Error(errMsg);
-    }
-
-    // Extract filename from headers
-    let filename = '';
-    const origName = response.headers.get('X-Original-Filename');
-    if (origName) {
-        filename = origName;
-    } else {
-        const disp = response.headers.get('Content-Disposition') || '';
-        const match = disp.match(/filename="?([^";\n]+)"?/);
-        if (match) filename = match[1];
-    }
-
-    const blob = await response.blob();
-    addLog(method, endpoint, response.status, 0, body, { size: blob.size, filename });
-    return { blob, filename };
-}
-
 // ─── Connect / Health Check ───
 async function initClient() {
-    // Default to same origin if no URL entered (when served from nginx)
     const serverUrl = (document.getElementById('serverUrl').value || window.location.origin).replace(/\/$/, '');
     const clientId = document.getElementById('clientId').value.trim();
     const wolfronixKey = document.getElementById('wolfronixKey').value.trim();
 
     if (!serverUrl) return alert('Server URL is required');
 
-    config = { baseUrl: serverUrl, clientId, wolfronixKey };
+    // Create SDK instance
+    wfx = new WolfronixSDK.Wolfronix({
+        baseUrl: serverUrl,
+        clientId: clientId,
+        wolfronixKey: wolfronixKey,
+        insecure: true,   // Allow self-signed certs
+        timeout: 300000,   // 5 min timeout for large files
+        retries: 1
+    });
 
     const badge = document.getElementById('status-badge');
     badge.className = 'badge badge-degraded';
     badge.textContent = 'Connecting...';
 
     try {
-        const health = await api('GET', '/health');
+        // Health check (direct fetch since SDK doesn't have a health method)
+        const resp = await fetch(serverUrl + '/health', {
+            headers: wolfronixKey ? { 'X-Wolfronix-Key': wolfronixKey } : {}
+        });
+        const health = await resp.json();
+
         if (health.status === 'healthy') {
             badge.className = 'badge badge-connected';
             badge.textContent = 'Connected — DB: ' + (health.database || 'ok');
@@ -125,103 +55,77 @@ async function initClient() {
             badge.className = 'badge badge-degraded';
             badge.textContent = 'Degraded — DB: ' + (health.database || '?');
         }
+        addLog('GET', '/health', resp.status, 0, null, health);
     } catch (e) {
         badge.className = 'badge badge-disconnected';
         badge.textContent = 'Failed: ' + e.message;
+        addLog('GET', '/health', 0, 0, null, { error: e.message });
     }
 }
 
 // ─── Auth: Register ───
 async function doRegister() {
+    requireSDK();
     const email = document.getElementById('regEmail').value.trim();
     const password = document.getElementById('regPassword').value;
     if (!email || !password) return alert('Email and password required');
 
-    setBusy('Generating keys...');
+    setBusy('Generating keys & registering...');
 
     try {
-        // 1. Generate RSA key pair in browser
-        const keyPair = await window.crypto.subtle.generateKey(
-            { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
-            true, ['encrypt', 'decrypt']
-        );
+        const start = Date.now();
+        const resp = await wfx.register(email, password);
+        const elapsed = Date.now() - start;
 
-        // 2. Export public key as PEM
-        const pubDer = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
-        const pubPem = derToPem(pubDer, 'PUBLIC KEY');
-
-        // 3. Wrap private key with password (PBKDF2 → AES-GCM)
-        const { encryptedKey, salt } = await wrapPrivateKey(keyPair.privateKey, password);
-
-        // 4. Register on server
-        const resp = await api('POST', '/api/v1/keys/register', {
-            client_id: config.clientId,
-            user_id: email,
-            public_key_pem: pubPem,
-            encrypted_private_key: encryptedKey,
-            salt: salt
-        });
-
-        // 5. Store keys in memory
-        auth = { userId: email, loggedIn: true };
-        window._keys = { publicKey: keyPair.publicKey, privateKey: keyPair.privateKey, pubPem };
+        addLog('POST', '/api/v1/keys/register', 200, elapsed, { user_id: email }, resp);
         showUserInfo();
         clearBusy();
-        showToast('Registered successfully!', 'success');
+        showToast('Registered successfully via SDK!', 'success');
     } catch (e) {
         clearBusy();
+        addLog('POST', '/api/v1/keys/register', e.statusCode || 0, 0, null, { error: e.message });
         showToast('Register failed: ' + e.message, 'error');
     }
 }
 
 // ─── Auth: Login ───
 async function doLogin() {
+    requireSDK();
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
     if (!email || !password) return alert('Email and password required');
 
-    setBusy('Fetching keys...');
+    setBusy('Fetching & unwrapping keys...');
 
     try {
-        // 1. Fetch encrypted keys from server
-        const resp = await api('POST', '/api/v1/keys/login', {
-            client_id: config.clientId,
-            user_id: email
-        });
+        const start = Date.now();
+        const resp = await wfx.login(email, password);
+        const elapsed = Date.now() - start;
 
-        if (!resp.encrypted_private_key || !resp.salt) {
-            throw new Error('User not found or keys missing');
-        }
-
-        // 2. Unwrap private key with password
-        const privateKey = await unwrapPrivateKey(resp.encrypted_private_key, password, resp.salt);
-
-        // 3. Import public key
-        const publicKey = await importPemPublicKey(resp.public_key_pem);
-
-        auth = { userId: email, loggedIn: true };
-        window._keys = { publicKey, privateKey, pubPem: resp.public_key_pem };
+        addLog('POST', '/api/v1/keys/login', 200, elapsed, { user_id: email }, resp);
         showUserInfo();
         clearBusy();
-        showToast('Logged in!', 'success');
+        showToast('Logged in via SDK!', 'success');
     } catch (e) {
         clearBusy();
+        addLog('POST', '/api/v1/keys/login', e.statusCode || 0, 0, null, { error: e.message });
         showToast('Login failed: ' + e.message, 'error');
     }
 }
 
 // ─── Auth: Logout ───
 function doLogout() {
-    auth = { userId: null, loggedIn: false };
-    window._keys = null;
+    if (wfx) wfx.logout();
     document.getElementById('user-info').style.display = 'none';
     showToast('Logged out', 'success');
 }
 
 function showUserInfo() {
     document.getElementById('user-info').style.display = '';
-    document.getElementById('currentUser').textContent = auth.userId;
-    document.getElementById('keyStatus').textContent = window._keys ? '✅ RSA keys loaded in memory' : '❌ No keys';
+    document.getElementById('currentUser').textContent = wfx.getUserId();
+    document.getElementById('keyStatus').textContent = wfx.hasPrivateKey()
+        ? '✅ RSA keys loaded in memory (SDK)'
+        : '❌ No keys';
 }
 
 // ─── Files: Encrypt ───
@@ -231,24 +135,24 @@ async function doEncrypt() {
     if (!fileInput.files.length) return alert('Select a file first');
 
     const file = fileInput.files[0];
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('user_id', auth.userId);
-    if (window._keys?.pubPem) {
-        formData.append('client_public_key', window._keys.pubPem);
-    }
+    setBusy(`Encrypting ${file.name} (${formatBytes(file.size)})...`);
 
-    setBusy('Encrypting...');
     try {
-        const resp = await api('POST', '/api/v1/encrypt', formData, true);
+        const start = Date.now();
+        const resp = await wfx.encrypt(file);
+        const elapsed = Date.now() - start;
+
         const box = document.getElementById('encryptResult');
         box.style.display = '';
         box.className = 'result-box success';
         box.textContent = JSON.stringify(resp, null, 2);
+
+        addLog('POST', '/api/v1/encrypt', 200, elapsed, { filename: file.name, size: file.size }, resp);
         clearBusy();
         showToast('File encrypted! ID: ' + (resp.file_id || 'N/A'), 'success');
     } catch (e) {
         clearBusy();
+        addLog('POST', '/api/v1/encrypt', e.statusCode || 500, 0, null, { error: e.message });
         showResult('encryptResult', e.message, true);
     }
 }
@@ -257,28 +161,34 @@ async function doEncrypt() {
 async function doListFiles() {
     requireAuth();
     try {
-        const files = await api('GET', '/api/v1/files');
-        const container = document.getElementById('fileList');
+        const start = Date.now();
+        const resp = await wfx.listFiles();
+        const elapsed = Date.now() - start;
 
-        if (!files || (Array.isArray(files) && files.length === 0)) {
+        addLog('GET', '/api/v1/files', 200, elapsed, null, resp);
+
+        const container = document.getElementById('fileList');
+        const files = resp.files || [];
+
+        if (files.length === 0) {
             container.innerHTML = '<p class="placeholder">No files found</p>';
             return;
         }
 
-        const arr = Array.isArray(files) ? files : [files];
-        container.innerHTML = arr.map(f => `
+        container.innerHTML = files.map(f => `
             <div class="file-item">
                 <div>
-                    <div class="file-name">${esc(f.name || f.original_name || 'unnamed')}</div>
-                    <div class="file-meta">ID: ${f.id || f.file_id} · ${formatBytes(f.size_bytes || f.encrypted_size || 0)} · ${f.date || f.created_at || '—'}</div>
+                    <div class="file-name">${esc(f.original_name || 'unnamed')}</div>
+                    <div class="file-meta">ID: ${f.file_id} · ${formatBytes(f.encrypted_size || 0)} · ${f.created_at || '—'}</div>
                 </div>
                 <div class="file-item-actions">
-                    <button onclick="doDecryptById('${f.id || f.file_id}')">Decrypt</button>
-                    <button class="btn-delete" onclick="doDelete('${f.id || f.file_id}')">Delete</button>
+                    <button onclick="doDecryptById('${f.file_id}')">Decrypt</button>
+                    <button class="btn-delete" onclick="doDelete('${f.file_id}')">Delete</button>
                 </div>
             </div>
         `).join('');
     } catch (e) {
+        addLog('GET', '/api/v1/files', e.statusCode || 500, 0, null, { error: e.message });
         showToast('List files failed: ' + e.message, 'error');
     }
 }
@@ -296,43 +206,30 @@ let currentPreviewName = '';
 
 async function doDecryptById(fileId) {
     requireAuth();
-    if (!window._keys?.privateKey) return alert('No private key loaded. Please login first.');
 
     setBusy('Decrypting...');
     try {
-        // Step 1: Get encrypted key_part_a
-        const keyResp = await api('GET', `/api/v1/files/${fileId}/key`);
+        const start = Date.now();
 
-        // Step 2: Decrypt key_part_a with our private key (RSA-OAEP)
-        const encKeyBytes = base64ToBytes(keyResp.key_part_a);
-        const decKeyBytes = await window.crypto.subtle.decrypt(
-            { name: 'RSA-OAEP' },
-            window._keys.privateKey,
-            encKeyBytes
-        );
-        const decryptedKeyA = bytesToBase64(new Uint8Array(decKeyBytes));
+        // SDK handles the full zero-knowledge flow:
+        // 1. GET /files/{id}/key → encrypted key_part_a
+        // 2. RSA decrypt key_part_a client-side
+        // 3. POST /files/{id}/decrypt with decrypted_key_a
+        const blob = await wfx.decrypt(fileId);
+        const elapsed = Date.now() - start;
 
-        // Step 3: Send decrypted key back → get file
-        const decryptResp = await fetchRaw('POST', `/api/v1/files/${fileId}/decrypt`, {
-            decrypted_key_a: decryptedKeyA,
-            user_role: 'owner'
-        });
+        addLog('POST', `/api/v1/files/${fileId}/decrypt`, 200, elapsed, null, { size: blob.size });
 
-        // Extract filename from response headers
-        const origFilename = decryptResp.filename || `decrypted_${fileId}`;
-        const blob = decryptResp.blob;
-
-        // Show in preview panel instead of downloading
-        if (blob) {
-            currentPreviewBlob = blob;
-            currentPreviewName = origFilename;
-            showPreview(blob, fileId);
-        }
+        // Show preview
+        currentPreviewBlob = blob;
+        currentPreviewName = `decrypted_${fileId}`;
+        showPreview(blob, fileId);
 
         clearBusy();
-        showToast('File decrypted successfully!', 'success');
+        showToast('File decrypted successfully via SDK!', 'success');
     } catch (e) {
         clearBusy();
+        addLog('POST', `/api/v1/files/${fileId}/decrypt`, e.statusCode || 500, 0, null, { error: e.message });
         showToast('Decrypt failed: ' + e.message, 'error');
     }
 }
@@ -389,13 +286,11 @@ function showPreview(blob, fileId) {
         return;
     }
 
-    // Text / JSON / CSV / code (anything readable)
+    // Text / JSON / CSV / code
     if (type.startsWith('text/') || type.includes('json') || type.includes('xml') ||
         /\.(txt|csv|json|xml|html|css|js|ts|md|log|yaml|yml|env|sql|py|go|java|c|cpp|h|sh|bat|ini|cfg|toml)$/i.test(name) ||
         blob.size < 2 * 1024 * 1024) {
-        // Try reading as text (for small files or known text types)
         blob.text().then(text => {
-            // Check if it looks like binary (lots of null bytes)
             const nullCount = (text.match(/\0/g) || []).length;
             if (nullCount > text.length * 0.1) {
                 showBinaryPreview(content, blob);
@@ -409,7 +304,6 @@ function showPreview(blob, fileId) {
         return;
     }
 
-    // Binary fallback
     showBinaryPreview(content, blob);
 }
 
@@ -448,10 +342,15 @@ async function doDelete(fileId) {
     if (!confirm('Delete file ' + fileId + '?')) return;
 
     try {
-        await api('DELETE', `/api/v1/files/${fileId}`);
+        const start = Date.now();
+        await wfx.deleteFile(fileId);
+        const elapsed = Date.now() - start;
+
+        addLog('DELETE', `/api/v1/files/${fileId}`, 200, elapsed, null, { status: 'deleted' });
         showToast('File deleted', 'success');
         doListFiles(); // refresh
     } catch (e) {
+        addLog('DELETE', `/api/v1/files/${fileId}`, e.statusCode || 500, 0, null, { error: e.message });
         showToast('Delete failed: ' + e.message, 'error');
     }
 }
@@ -466,20 +365,20 @@ async function doMsgEncrypt() {
 
     setBusy('Encrypting message...');
     try {
-        const resp = await api('POST', '/api/v1/messages/encrypt', {
-            message,
-            user_id: auth.userId,
-            layer
-        });
+        const start = Date.now();
+        const resp = await wfx.serverEncrypt(message, { layer });
+        const elapsed = Date.now() - start;
 
         lastEncryptedMsg = resp;
         document.getElementById('decryptMsgBtn').disabled = false;
 
+        addLog('POST', '/api/v1/messages/encrypt', 200, elapsed, { message, layer }, resp);
         showResult('msgEncResult', JSON.stringify(resp, null, 2));
         clearBusy();
-        showToast('Message encrypted!', 'success');
+        showToast('Message encrypted via SDK!', 'success');
     } catch (e) {
         clearBusy();
+        addLog('POST', '/api/v1/messages/encrypt', e.statusCode || 500, 0, null, { error: e.message });
         showResult('msgEncResult', e.message, true);
     }
 }
@@ -491,18 +390,21 @@ async function doMsgDecrypt() {
 
     setBusy('Decrypting...');
     try {
-        const resp = await api('POST', '/api/v1/messages/decrypt', {
-            encrypted_message: lastEncryptedMsg.encrypted_message,
+        const start = Date.now();
+        const decryptedText = await wfx.serverDecrypt({
+            encryptedMessage: lastEncryptedMsg.encrypted_message,
             nonce: lastEncryptedMsg.nonce,
-            key_part_a: lastEncryptedMsg.key_part_a,
-            message_tag: lastEncryptedMsg.message_tag || '',
-            user_id: auth.userId
+            keyPartA: lastEncryptedMsg.key_part_a,
+            messageTag: lastEncryptedMsg.message_tag || '',
         });
+        const elapsed = Date.now() - start;
 
-        showResult('msgDecResult', '✅ Decrypted: ' + (resp.message || JSON.stringify(resp)));
+        addLog('POST', '/api/v1/messages/decrypt', 200, elapsed, null, { message: decryptedText });
+        showResult('msgDecResult', '✅ Decrypted: ' + decryptedText);
         clearBusy();
     } catch (e) {
         clearBusy();
+        addLog('POST', '/api/v1/messages/decrypt', e.statusCode || 500, 0, null, { error: e.message });
         showResult('msgDecResult', e.message, true);
     }
 }
@@ -518,118 +420,35 @@ async function doBatchEncrypt() {
 
     setBusy('Batch encrypting...');
     try {
-        const resp = await api('POST', '/api/v1/messages/batch/encrypt', {
-            messages,
-            user_id: auth.userId,
-            layer: 4
-        });
+        const start = Date.now();
+        const resp = await wfx.serverEncryptBatch(messages, { layer: 4 });
+        const elapsed = Date.now() - start;
 
+        addLog('POST', '/api/v1/messages/batch/encrypt', 200, elapsed, { count: messages.length }, resp);
         showResult('batchResult', JSON.stringify(resp, null, 2));
         clearBusy();
-        showToast(`${messages.length} messages encrypted!`, 'success');
+        showToast(`${messages.length} messages encrypted via SDK!`, 'success');
     } catch (e) {
         clearBusy();
+        addLog('POST', '/api/v1/messages/batch/encrypt', e.statusCode || 500, 0, null, { error: e.message });
         showResult('batchResult', e.message, true);
     }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Crypto Helpers (browser Web Crypto API)
-// ═══════════════════════════════════════════════════════════
-
-function derToPem(der, label) {
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(der)));
-    const lines = b64.match(/.{1,64}/g).join('\n');
-    return `-----BEGIN ${label}-----\n${lines}\n-----END ${label}-----`;
-}
-
-function pemToDer(pem) {
-    const b64 = pem.replace(/-----[^-]+-----/g, '').replace(/\s/g, '');
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes.buffer;
-}
-
-async function wrapPrivateKey(privateKey, password) {
-    // Export private key
-    const pkcs8 = await window.crypto.subtle.exportKey('pkcs8', privateKey);
-
-    // Derive wrapping key from password (PBKDF2 → AES-GCM-256)
-    const salt = window.crypto.getRandomValues(new Uint8Array(16));
-    const iv = window.crypto.getRandomValues(new Uint8Array(12));
-    const enc = new TextEncoder();
-
-    const keyMaterial = await window.crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-    const aesKey = await window.crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-        keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt']
-    );
-
-    const encrypted = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, pkcs8);
-
-    // Pack: iv(12) + ciphertext
-    const packed = new Uint8Array(iv.length + encrypted.byteLength);
-    packed.set(iv);
-    packed.set(new Uint8Array(encrypted), iv.length);
-
-    return {
-        encryptedKey: bytesToBase64(packed),
-        salt: bytesToHex(salt)
-    };
-}
-
-async function unwrapPrivateKey(encryptedKeyB64, password, saltHex) {
-    const packed = base64ToBytes(encryptedKeyB64);
-    const iv = packed.slice(0, 12);
-    const ciphertext = packed.slice(12);
-    const salt = hexToBytes(saltHex);
-    const enc = new TextEncoder();
-
-    const keyMaterial = await window.crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-    const aesKey = await window.crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-        keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
-    );
-
-    const pkcs8 = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext);
-
-    return window.crypto.subtle.importKey('pkcs8', pkcs8, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['decrypt']);
-}
-
-async function importPemPublicKey(pem) {
-    const der = pemToDer(pem);
-    return window.crypto.subtle.importKey('spki', der, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['encrypt']);
-}
-
-// ─── Base64 / Hex Helpers ───
-function bytesToBase64(bytes) {
-    return btoa(String.fromCharCode(...bytes));
-}
-
-function base64ToBytes(b64) {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-}
-
-function bytesToHex(bytes) {
-    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex) {
-    const bytes = new Uint8Array(hex.length / 2);
-    for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
-    return bytes;
 }
 
 // ═══════════════════════════════════════════════════════════
 // UI Helpers
 // ═══════════════════════════════════════════════════════════
 
+function requireSDK() {
+    if (!wfx) {
+        showToast('Please connect to server first', 'error');
+        throw new Error('Not connected');
+    }
+}
+
 function requireAuth() {
-    if (!auth.loggedIn) {
+    requireSDK();
+    if (!wfx.isAuthenticated()) {
         showToast('Please login first', 'error');
         throw new Error('Not logged in');
     }

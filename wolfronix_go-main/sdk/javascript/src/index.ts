@@ -53,6 +53,14 @@ export interface EncryptResponse {
   file_id: string;
   file_size: number;
   enc_time_ms: number;
+  /** Detailed timing breakdown from server */
+  upload_ms?: number;
+  read_ms?: number;
+  encrypt_ms?: number;
+  store_ms?: number;
+  total_ms?: number;
+  /** Any extra fields from the server response */
+  [key: string]: unknown;
 }
 
 export interface FileInfo {
@@ -386,7 +394,10 @@ export class Wolfronix {
     for (let attempt = 1; attempt <= this.config.retries; attempt++) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+        // Skip timeout for file uploads (FormData) — large files can take hours
+        const timeoutId = formData
+          ? null
+          : setTimeout(() => controller.abort(), this.config.timeout);
 
         const fetchOptions: RequestInit = {
           method,
@@ -415,7 +426,7 @@ export class Wolfronix {
         }
 
         const response = await fetch(url, fetchOptions);
-        clearTimeout(timeoutId);
+        if (timeoutId) clearTimeout(timeoutId);
 
         // Handle errors
         if (!response.ok) {
@@ -678,10 +689,8 @@ export class Wolfronix {
     });
 
     return {
-      status: response.status,
+      ...response,
       file_id: String(response.file_id),
-      file_size: response.file_size,
-      enc_time_ms: response.enc_time_ms
     };
   }
 

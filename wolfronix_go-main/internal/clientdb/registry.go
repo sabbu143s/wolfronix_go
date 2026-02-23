@@ -105,6 +105,7 @@ func (r *ClientRegistry) RegisterClient(client *RegisteredClient) error {
 			wolfronix_key = EXCLUDED.wolfronix_key,
 			db_type = EXCLUDED.db_type,
 			db_config = EXCLUDED.db_config,
+			is_active = true,
 			updated_at = CURRENT_TIMESTAMP
 		RETURNING id
 	`
