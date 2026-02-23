@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS wolfronix_files (
 -- Encrypted file binary data (stored separately for performance)
 CREATE TABLE IF NOT EXISTS wolfronix_file_data (
     file_id         BIGINT PRIMARY KEY REFERENCES wolfronix_files(id) ON DELETE CASCADE,
-    encrypted_data  BYTEA NOT NULL
+    encrypted_data  TEXT NOT NULL
 );
 
 -- User encryption keys (wrapped keys stored per user)

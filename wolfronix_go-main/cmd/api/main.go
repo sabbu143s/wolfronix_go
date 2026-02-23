@@ -235,6 +235,7 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Allow files up to 4 GB (memory threshold 512MB, rest spills to temp disk)
 	err := r.ParseMultipartForm(512 << 20)
+	uploadDone := time.Now()
 	if err != nil {
 		log.Printf("❌ Parse form error: %v", err)
 		http.Error(w, `{"error": "File too large or parse error"}`, 400)
@@ -312,11 +313,14 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	totalSize := int64(len(plaintext))
+	readDone := time.Now()
 
 	// AES-256-GCM Seal: nonce is prepended to ciphertext+tag
 	encryptedData := gcm.Seal(nonce, nonce, plaintext, nil)
+	plaintext = nil // Free plaintext memory immediately (saves ~filesize RAM)
+	encryptDone := time.Now()
 
-	log.Printf("📦 Encrypted %d bytes with AES-256-GCM (authenticated)", totalSize)
+	log.Printf("📦 Encrypted %d bytes with AES-256-GCM in %dms", totalSize, encryptDone.Sub(readDone).Milliseconds())
 
 	// === LAYER 4: DUAL KEY SPLIT ===
 	encA := encryptRSA(key[:16], clientPubKey)
@@ -326,8 +330,6 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	encB := encryptRSA(key[16:], publicKeyToPEM(ServerPublicKey))
 
-	duration := time.Since(start).Milliseconds()
-
 	// Create file metadata
 	fileMetadata := &clientdb.StoredFile{
 		Filename:    header.Filename,
@@ -335,14 +337,17 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 		KeyPartA:    encA,
 		KeyPartB:    encB,
 		IV:          base64.StdEncoding.EncodeToString(nonce),
-		EncTimeMS:   duration,
+		EncTimeMS:   encryptDone.Sub(readDone).Milliseconds(),
 		ClientID:    clientID,
 		UserID:      userID,
 		StorageType: "blob",
 	}
 
 	// Send to client's API
+	storeStart := time.Now()
 	fileID, err := clientDBConn.StoreFileWithData(config, fileMetadata, encryptedData)
+	encryptedData = nil // Free encrypted data memory after storage
+	storeDone := time.Now()
 	if err != nil {
 		log.Printf("❌ Failed to store in Client DB: %v", err)
 		if metricsStore != nil {
@@ -352,7 +357,7 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("📤 Data sent to Client DB (ID: %d)", fileID)
+	log.Printf("📤 Data sent to Client DB (ID: %d) in %dms", fileID, storeDone.Sub(storeStart).Milliseconds())
 
 	// Layer 1: Store fake data in client's dev DB if dev mode
 	if isDevEnv && fakeGen != nil {
@@ -361,19 +366,33 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("🎭 Layer 1: Fake data sent to Client Dev DB (%d bytes)", len(fakeData))
 	}
 
+	// Calculate timing breakdown
+	totalDuration := time.Since(start).Milliseconds()
+	uploadMs := uploadDone.Sub(start).Milliseconds()
+	readMs := readDone.Sub(uploadDone).Milliseconds()
+	encryptMs := encryptDone.Sub(readDone).Milliseconds()
+	storeMs := storeDone.Sub(storeStart).Milliseconds()
+
 	// Record encryption metrics
 	if metricsStore != nil {
-		metricsStore.RecordEncryption(clientID, userID, duration, 1, totalSize)
+		metricsStore.RecordEncryption(clientID, userID, totalDuration, 1, totalSize)
 	}
 
-	log.Printf("✅ File encrypted: %s (%d bytes) in %dms [enterprise]", header.Filename, totalSize, duration)
+	log.Printf("✅ File encrypted: %s (%d bytes) in %dms [upload=%dms encrypt=%dms store=%dms]",
+		header.Filename, totalSize, totalDuration, uploadMs, encryptMs, storeMs)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":      "success",
-		"enc_time_ms": duration,
+		"enc_time_ms": totalDuration,
 		"file_size":   totalSize,
 		"file_id":     fileID,
+		"timing": map[string]int64{
+			"upload_ms":  uploadMs,
+			"read_ms":    readMs,
+			"encrypt_ms": encryptMs,
+			"store_ms":   storeMs,
+		},
 	})
 }
 
@@ -531,6 +550,7 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch file metadata from client's API
+	fetchMetaStart := time.Now()
 	fileMeta, err := clientDBConn.GetFileMetadata(config, int64(id), userID)
 	if err != nil {
 		if metricsStore != nil {
@@ -539,9 +559,11 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "File not found"}`, 404)
 		return
 	}
+	fetchMetaDone := time.Now()
 
 	// Fetch encrypted data from client's API
 	encData, err := clientDBConn.GetFileData(config, int64(id), userID)
+	fetchDataDone := time.Now()
 	if err != nil {
 		if metricsStore != nil {
 			metricsStore.RecordError(clientID, userID, "decrypt", "Failed to fetch data: "+err.Error())
@@ -586,6 +608,8 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	gcmNonce, ciphertext := encData[:nonceSize], encData[nonceSize:]
 	decData, err := gcm.Open(nil, gcmNonce, ciphertext, nil)
+	encData = nil // Free encrypted data memory
+	decryptDone := time.Now()
 	if err != nil {
 		if metricsStore != nil {
 			metricsStore.RecordError(clientID, userID, "decrypt", "Integrity check failed: "+err.Error())
@@ -633,6 +657,9 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Record decryption metrics
 	duration := time.Since(start).Milliseconds()
+	fetchMetaMs := fetchMetaDone.Sub(fetchMetaStart).Milliseconds()
+	fetchDataMs := fetchDataDone.Sub(fetchMetaDone).Milliseconds()
+	decryptMs := decryptDone.Sub(fetchDataDone).Milliseconds()
 	if metricsStore != nil {
 		metricsStore.RecordDecryption(clientID, userID, duration, 1, int64(len(decData)))
 	}
@@ -648,7 +675,11 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Original-Filename", safeFilename)
 	w.Header().Set("X-Masking-Applied", userRole)
-	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Original-Filename, X-Masking-Applied")
+	w.Header().Set("X-Timing-Total-Ms", strconv.FormatInt(duration, 10))
+	w.Header().Set("X-Timing-Fetch-Meta-Ms", strconv.FormatInt(fetchMetaMs, 10))
+	w.Header().Set("X-Timing-Fetch-Data-Ms", strconv.FormatInt(fetchDataMs, 10))
+	w.Header().Set("X-Timing-Decrypt-Ms", strconv.FormatInt(decryptMs, 10))
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Original-Filename, X-Masking-Applied, X-Timing-Total-Ms, X-Timing-Fetch-Meta-Ms, X-Timing-Fetch-Data-Ms, X-Timing-Decrypt-Ms")
 	w.Write(decData)
 
 	log.Printf("\xe2\x9c\x85 Decrypted %d bytes: %s [enterprise]", len(decData), fileMeta.Filename)

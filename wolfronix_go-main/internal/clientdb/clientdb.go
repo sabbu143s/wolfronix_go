@@ -2,6 +2,7 @@ package clientdb
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +17,8 @@ import (
 // maxResponseSize limits how much data we read from client API responses
 // to prevent OOM attacks from malicious endpoints. (10 MB for metadata, 512 MB for file data)
 const (
-	maxResponseSize     = 10 * 1024 * 1024  // 10 MB
-	maxFileResponseSize = 512 * 1024 * 1024 // 512 MB
+	maxResponseSize     = 10 * 1024 * 1024       // 10 MB
+	maxFileResponseSize = 4 * 1024 * 1024 * 1024 // 4 GB (supports large file transfers)
 )
 
 // ClientDBConnector handles communication with client's database API
@@ -62,7 +63,7 @@ type StoredKey struct {
 func NewClientDBConnector() *ClientDBConnector {
 	return &ClientDBConnector{
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 30 * time.Minute, // Supports large file transfers up to 4 GB
 		},
 	}
 }
@@ -111,34 +112,63 @@ func (c *ClientDBConnector) StoreFileMetadata(config *ClientConfig, file *Stored
 }
 
 // StoreFileWithData sends both metadata and encrypted file data to client's DB
+// Uses io.Pipe for zero-copy streaming — avoids buffering the entire file twice in memory.
 // The client's API should implement: POST /wolfronix/files/upload (multipart)
 func (c *ClientDBConnector) StoreFileWithData(config *ClientConfig, file *StoredFile, encryptedData []byte) (int64, error) {
-	url := fmt.Sprintf("%s/wolfronix/files/upload", config.APIEndpoint)
+	uploadURL := fmt.Sprintf("%s/wolfronix/files/upload", config.APIEndpoint)
 
-	// Create multipart form
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
+	// Use io.Pipe for streaming instead of bytes.Buffer
+	// This avoids allocating another ~filesize buffer for the multipart body
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	contentType := writer.FormDataContentType()
 
-	// Add metadata as JSON field
-	metadataJSON, _ := json.Marshal(file)
-	writer.WriteField("metadata", string(metadataJSON))
+	// Write multipart form data in background goroutine
+	go func() {
+		var writeErr error
+		defer func() {
+			if writeErr != nil {
+				pw.CloseWithError(writeErr)
+			} else {
+				pw.Close()
+			}
+		}()
 
-	// Add encrypted file data
-	part, err := writer.CreateFormFile("encrypted_data", file.Filename+".enc")
+		metadataJSON, _ := json.Marshal(file)
+		if writeErr = writer.WriteField("metadata", string(metadataJSON)); writeErr != nil {
+			return
+		}
+
+		var part io.Writer
+		part, writeErr = writer.CreateFormFile("encrypted_data", file.Filename+".enc")
+		if writeErr != nil {
+			return
+		}
+		if _, writeErr = part.Write(encryptedData); writeErr != nil {
+			return
+		}
+		writeErr = writer.Close()
+	}()
+
+	req, err := http.NewRequest("POST", uploadURL, pr)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create form file: %w", err)
-	}
-	part.Write(encryptedData)
-	writer.Close()
-
-	req, err := http.NewRequest("POST", url, &buf)
-	if err != nil {
+		pr.Close()
 		return 0, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Wolfronix-API-Key", config.APIKey)
 	req.Header.Set("X-Client-ID", config.ClientID)
+
+	// Dynamic timeout: 60s base + 1s per MB, capped at 30 min
+	dataSizeMB := len(encryptedData) / (1024 * 1024)
+	timeout := time.Duration(60+dataSizeMB) * time.Second
+	if timeout > 30*time.Minute {
+		timeout = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req = req.WithContext(ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

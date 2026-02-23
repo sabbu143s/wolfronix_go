@@ -29,7 +29,7 @@ def _gen_file_id():
     _next_file_id["val"] += 1
     return fid
 
-@app.route('/api/wolfronix/files/upload', methods=['POST'])
+@app.route('/wolfronix/files/upload', methods=['POST'])
 def upload_file():
     print(f"📥 Received file upload request")
     
@@ -58,7 +58,7 @@ def upload_file():
     print(f"✅ Stored file {file_id}: {file_meta.get('filename', 'unknown')}")
     return jsonify({"id": file_id}), 201
 
-@app.route('/api/wolfronix/files', methods=['POST'])
+@app.route('/wolfronix/files', methods=['POST'])
 def store_file_metadata():
     """Store file metadata only (JSON body, no multipart upload)."""
     data = request.json
@@ -75,7 +75,7 @@ def store_file_metadata():
     print(f"📝 Stored metadata {file_id}: {data.get('filename', 'unknown')}")
     return jsonify({"id": file_id}), 201
 
-@app.route('/api/wolfronix/files/<int:file_id>', methods=['GET'])
+@app.route('/wolfronix/files/<int:file_id>', methods=['GET'])
 def get_file_meta(file_id):
     meta_path = os.path.join(FILES_DIR, f"{file_id}.json")
     if not os.path.exists(meta_path):
@@ -86,7 +86,7 @@ def get_file_meta(file_id):
         
     return jsonify(meta)
 
-@app.route('/api/wolfronix/files/<int:file_id>/data', methods=['GET'])
+@app.route('/wolfronix/files/<int:file_id>/data', methods=['GET'])
 def get_file_data(file_id):
     file_path = os.path.join(FILES_DIR, f"{file_id}.enc")
     if not os.path.exists(file_path):
@@ -94,7 +94,7 @@ def get_file_data(file_id):
         
     return send_file(file_path, mimetype='application/octet-stream')
 
-@app.route('/api/wolfronix/files', methods=['GET'])
+@app.route('/wolfronix/files', methods=['GET'])
 def list_files():
     user_id = request.args.get('user_id')
     files = []
@@ -112,7 +112,7 @@ def list_files():
                     
     return jsonify(files)
 
-@app.route('/api/wolfronix/keys', methods=['POST'])
+@app.route('/wolfronix/keys', methods=['POST'])
 def store_key():
     data = request.json
     user_id = data.get('user_id')
@@ -126,7 +126,7 @@ def store_key():
     print(f"🔑 Stored keys for user {user_id}")
     return jsonify({"status": "success"}), 201
 
-@app.route('/api/wolfronix/keys/<user_id>', methods=['GET'])
+@app.route('/wolfronix/keys/<user_id>', methods=['GET'])
 def get_key(user_id):
     key_path = os.path.join(KEYS_DIR, f"{user_id}.json")
     if not os.path.exists(key_path):
@@ -137,7 +137,7 @@ def get_key(user_id):
         
     return jsonify(data)
 
-@app.route('/api/wolfronix/keys/<user_id>/public', methods=['GET'])
+@app.route('/wolfronix/keys/<user_id>/public', methods=['GET'])
 def get_public_key(user_id):
     key_path = os.path.join(KEYS_DIR, f"{user_id}.json")
     if not os.path.exists(key_path):
@@ -148,7 +148,7 @@ def get_public_key(user_id):
         
     return jsonify({"public_key_pem": data.get('public_key_pem')})
 
-@app.route('/api/wolfronix/files/<int:file_id>', methods=['DELETE'])
+@app.route('/wolfronix/files/<int:file_id>', methods=['DELETE'])
 def delete_file(file_id):
     """Delete a file and its metadata."""
     meta_path = os.path.join(FILES_DIR, f"{file_id}.json")
@@ -164,7 +164,7 @@ def delete_file(file_id):
     print(f"🗑️  Deleted file {file_id}")
     return jsonify({"status": "deleted", "id": file_id}), 200
 
-@app.route('/api/wolfronix/dev/files', methods=['POST'])
+@app.route('/wolfronix/dev/files', methods=['POST'])
 def store_dev_files():
     """Store fake/development data (Layer 1 fake-gen output)."""
     data = request.json

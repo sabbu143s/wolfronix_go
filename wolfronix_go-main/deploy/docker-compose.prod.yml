@@ -207,7 +207,28 @@ services:
     expose:
       - "4005"
 
+  # ─── Mock Local DB (Flask-based, filesystem storage) ──────────────────────────
+  # Ultra-fast local storage for testing/demo. No cloud roundtrips.
+  # Used by clients registered with db_type=custom_api pointing to this container.
+  mock_db:
+    build:
+      context: .
+      dockerfile: mock_db/Dockerfile
+    container_name: wolfronix_mock_db
+    restart: always
+    volumes:
+      - mock_storage:/app/mock_storage
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - wolfronix_network
+    expose:
+      - "4000"
+
 volumes:
+  mock_storage:
   wolfronix_data:
     driver: local
     driver_opts:
