@@ -166,10 +166,12 @@ func main() {
 	r.HandleFunc("/api/v1/enterprise/clients/{clientID}", requireAdminKey(deactivateEnterpriseClientHandler)).Methods("DELETE", "OPTIONS")
 
 	// === ZERO-KNOWLEDGE KEY MANAGEMENT ROUTES ===
-	// Registration: Browser sends wrapped private key + public key
+	// Registration: Browser sends wrapped private key + public key + optional backup key
 	r.HandleFunc("/api/v1/keys/register", registerUserKeysHandler).Methods("POST", "OPTIONS")
 	// Login: Fetch wrapped private key for client-side decryption
 	r.HandleFunc("/api/v1/keys/login", loginFetchKeysHandler).Methods("POST", "OPTIONS")
+	// Recovery: Fetch backup key, then update password-wrapped key
+	r.HandleFunc("/api/v1/keys/recover", recoverUserKeysHandler).Methods("POST", "OPTIONS")
 	// Get public key for a user (for encrypting data for them)
 	r.HandleFunc("/api/v1/keys/public/{clientID}/{userID}", getPublicKeyHandler).Methods("GET", "OPTIONS")
 
@@ -1621,6 +1623,8 @@ func registerUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 		PublicKeyPEM        string `json:"public_key_pem"`
 		EncryptedPrivateKey string `json:"encrypted_private_key"` // Already wrapped by browser
 		Salt                string `json:"salt"`                  // Salt used for wrapping
+		BackupKey           string `json:"backup_key"`            // BIP39-wrapped backup (optional)
+		BackupSalt          string `json:"backup_salt"`           // Salt for backup wrapping (optional)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1633,23 +1637,25 @@ func registerUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the wrapped key (we never see the raw private key!)
-	err := keyWrapStore.StoreWrappedKey(req.ClientID, req.UserID, req.PublicKeyPEM, req.EncryptedPrivateKey, req.Salt)
+	// Store the wrapped key + optional backup (we never see the raw private key!)
+	err := keyWrapStore.StoreWrappedKey(req.ClientID, req.UserID, req.PublicKeyPEM, req.EncryptedPrivateKey, req.Salt, req.BackupKey, req.BackupSalt)
 	if err != nil {
 		log.Printf("❌ Failed to store wrapped key: %v", err)
 		http.Error(w, `{"error": "failed to store keys"}`, http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("🔐 Zero-Knowledge: Stored wrapped keys for user %s (client: %s)", req.UserID, req.ClientID)
+	hasBackup := req.BackupKey != ""
+	log.Printf("🔐 Zero-Knowledge: Stored wrapped keys for user %s (client: %s, backup: %v)", req.UserID, req.ClientID, hasBackup)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":    "success",
-		"message":   "Keys registered successfully. Private key is encrypted and can only be unlocked with your password.",
-		"client_id": req.ClientID,
-		"user_id":   req.UserID,
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "success",
+		"message":    "Keys registered successfully. Private key is encrypted and can only be unlocked with your password.",
+		"client_id":  req.ClientID,
+		"user_id":    req.UserID,
+		"has_backup": hasBackup,
 	})
 }
 
@@ -1736,4 +1742,81 @@ func getPublicKeyHandler(w http.ResponseWriter, r *http.Request) {
 		"user_id":        userID,
 		"public_key_pem": publicKey,
 	})
+}
+
+// recoverUserKeysHandler handles account recovery via BIP39 mnemonic
+// POST /api/v1/keys/recover
+// Step 1 (action=fetch_backup): Returns the backup-wrapped key for client-side decryption
+// Step 2 (action=update_password): Updates the password-wrapped key after client-side re-wrap
+func recoverUserKeysHandler(w http.ResponseWriter, r *http.Request) {
+	if keyWrapStore == nil {
+		http.Error(w, `{"error": "key management not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Action              string `json:"action"` // "fetch_backup" or "update_password"
+		ClientID            string `json:"client_id"`
+		UserID              string `json:"user_id"`
+		EncryptedPrivateKey string `json:"encrypted_private_key"` // New password-wrapped key (for update_password)
+		Salt                string `json:"salt"`                  // New salt (for update_password)
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.ClientID == "" || req.UserID == "" || req.Action == "" {
+		http.Error(w, `{"error": "action, client_id, and user_id are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	switch req.Action {
+	case "fetch_backup":
+		// Return the backup key blob so the client can attempt to decrypt with their mnemonic
+		backupKey, backupSalt, err := keyWrapStore.GetBackupKey(req.ClientID, req.UserID)
+		if err != nil {
+			http.Error(w, `{"error": "user not found"}`, http.StatusNotFound)
+			return
+		}
+		if backupKey == "" {
+			http.Error(w, `{"error": "no recovery backup found for this account"}`, http.StatusNotFound)
+			return
+		}
+
+		log.Printf("\U0001f511 Recovery: Sent backup key blob for user %s (client: %s)", req.UserID, req.ClientID)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":      "success",
+			"backup_key":  backupKey,
+			"backup_salt": backupSalt,
+		})
+
+	case "update_password":
+		// Client decrypted the backup, re-wrapped with new password, now save the new wrapped key
+		if req.EncryptedPrivateKey == "" || req.Salt == "" {
+			http.Error(w, `{"error": "encrypted_private_key and salt are required for password update"}`, http.StatusBadRequest)
+			return
+		}
+
+		err := keyWrapStore.UpdatePasswordWrappedKey(req.ClientID, req.UserID, req.EncryptedPrivateKey, req.Salt)
+		if err != nil {
+			log.Printf("\u274c Recovery update failed: %v", err)
+			http.Error(w, `{"error": "failed to update keys"}`, http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("\u2705 Recovery: Password re-wrapped for user %s (client: %s)", req.UserID, req.ClientID)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "success",
+			"message": "Password updated successfully via recovery phrase.",
+		})
+
+	default:
+		http.Error(w, `{"error": "invalid action, must be fetch_backup or update_password"}`, http.StatusBadRequest)
+	}
 }

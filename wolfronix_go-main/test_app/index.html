@@ -75,6 +75,21 @@
             </div>
         </div>
 
+        <!-- Account Recovery -->
+        <div class="card glass" style="margin-top:16px;">
+            <div class="card-header-row">
+                <h3>🔄 Account Recovery</h3>
+                <span class="encrypted-badge">🔑 BIP39</span>
+            </div>
+            <p class="desc">Forgot your password? Use your 24-word recovery phrase to regain access and set a new password.</p>
+            <div class="form-col">
+                <input type="email" id="recoverEmail" placeholder="Email address">
+                <textarea id="recoverPhrase" rows="3" placeholder="Enter your 24-word recovery phrase..." style="font-family:monospace; font-size:13px;"></textarea>
+                <input type="password" id="recoverNewPassword" placeholder="New password">
+                <button onclick="doRecover()" class="btn-primary btn-full">🔄 Recover Account</button>
+            </div>
+        </div>
+
         <div class="card glass" id="user-info" style="display:none;">
             <div class="user-info-row">
                 <div>
@@ -403,7 +418,7 @@
         </div>
     </div>
 
-    <script src="wolfronix.browser.js"></script>
+    <script src="dist/wolfronix-sdk.global.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

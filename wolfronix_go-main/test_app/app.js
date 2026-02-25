@@ -55,14 +55,56 @@ async function doRegister() {
     if (!email || !pass) return showToast('Enter email and password', 'error');
 
     try {
-        showToast('Generating RSA keys...', 'success');
+        showToast('Generating RSA keys + BIP39 recovery phrase...', 'success');
         const res = await wfx.register(email, pass);
-        addLog('POST', '/api/v1/users/register', 200, JSON.stringify(res));
+        addLog('POST', '/api/v1/keys/register', 200, JSON.stringify(res));
         showToast('Registered! User: ' + res.user_id, 'success');
         showUserInfo(email);
+
+        // Show BIP39 recovery phrase in a modal
+        if (res.recovery_phrase) {
+            const modal = document.getElementById('docViewerModal');
+            const title = document.getElementById('docViewerTitle');
+            const body = document.getElementById('docViewerBody');
+
+            title.textContent = '🔑 Recovery Phrase — Save This!';
+            body.innerHTML = `
+                <div style="background:var(--surface3); border-radius:12px; padding:20px; margin-bottom:16px;">
+                    <p style="color:var(--orange); font-weight:700; margin-bottom:12px;">⚠️ IMPORTANT: Write down these 24 words and store them in a safe place. They are your ONLY way to recover your account if you forget your password.</p>
+                    <div style="background:var(--bg); border:2px dashed var(--orange); border-radius:8px; padding:16px; font-family:monospace; font-size:14px; line-height:2; word-spacing:8px; color:var(--text);">
+                        ${escapeHtml(res.recovery_phrase)}
+                    </div>
+                    <p style="color:var(--text3); font-size:12px; margin-top:12px;">This phrase is generated on your device and never sent to the server. Do NOT share it with anyone.</p>
+                </div>`;
+            modal.style.display = 'flex';
+        }
     } catch (err) {
         showToast('Register failed: ' + err.message, 'error');
-        addLog('POST', '/api/v1/users/register', err.statusCode || 500, err.message);
+        addLog('POST', '/api/v1/keys/register', err.statusCode || 500, err.message);
+    }
+}
+
+async function doRecover() {
+    if (!wfx) return showToast('Connect to server first', 'error');
+    const email = document.getElementById('recoverEmail').value.trim();
+    const phrase = document.getElementById('recoverPhrase').value.trim();
+    const newPass = document.getElementById('recoverNewPassword').value;
+    if (!email || !phrase || !newPass) return showToast('Fill in all recovery fields', 'error');
+
+    try {
+        showToast('Recovering account with BIP39 phrase...', 'success');
+        const res = await wfx.recoverAccount(email, phrase, newPass);
+        addLog('POST', '/api/v1/keys/recover', 200, 'Account recovered');
+        showToast('Account recovered! Welcome back.', 'success');
+        showUserInfo(email);
+
+        // Clear the form
+        document.getElementById('recoverEmail').value = '';
+        document.getElementById('recoverPhrase').value = '';
+        document.getElementById('recoverNewPassword').value = '';
+    } catch (err) {
+        showToast('Recovery failed: ' + err.message, 'error');
+        addLog('POST', '/api/v1/keys/recover', err.statusCode || 500, err.message);
     }
 }
 
@@ -808,70 +850,7 @@ async function pollForMessages() {
     }
 }
 
-async function decryptReceivedMessage(recipientId, index) {
-    const msg = chatMessages[recipientId][index];
-    if (!msg || !msg.packet) return;
 
-    try {
-        const plainText = await wfx.decryptMessage(msg.packet);
-
-        // Check if decrypted content is a media payload (not plain text)
-        try {
-            const mediaCheck = JSON.parse(plainText);
-            if (mediaCheck.mediaType === 'file' && mediaCheck.data) {
-                msg.isMedia = true;
-                msg.media = mediaCheck;
-                msg.text = '📎 ' + mediaCheck.fileName;
-                renderChatMessages();
-                showToast('Media decrypted! Tap to view.', 'success');
-                return;
-            }
-        } catch (e) { /* not media JSON, it's regular text */ }
-
-        msg.decryptedText = plainText;
-        renderChatMessages();
-        showToast('Message decrypted!', 'success');
-    } catch (err) {
-        showToast('Decrypt failed: ' + err.message, 'error');
-    }
-}
-
-function simulateReceiveMessage() {
-    if (!currentRecipient) return showToast('Open a chat first', 'error');
-
-    const packet = prompt('Paste the encrypted packet (JSON string) from the sender:');
-    if (!packet) return;
-
-    chatMessages[currentRecipient].push({
-        type: 'received',
-        text: null,
-        packet: packet,
-        time: new Date().toISOString()
-    });
-
-    renderChatMessages();
-    renderChatContacts();
-    showToast('Encrypted message received!', 'success');
-}
-
-function copyPacket(index) {
-    if (!currentRecipient || !chatMessages[currentRecipient]) return;
-    const msg = chatMessages[currentRecipient][index];
-    if (!msg || !msg.packet) return;
-
-    navigator.clipboard.writeText(msg.packet).then(() => {
-        showToast('Encrypted packet copied! Paste it in the other browser.', 'success');
-    }).catch(() => {
-        // Fallback for non-HTTPS
-        const ta = document.createElement('textarea');
-        ta.value = msg.packet;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        showToast('Encrypted packet copied!', 'success');
-    });
-}
 
 function renderChatContacts() {
     const container = document.getElementById('chatContacts');
@@ -902,25 +881,7 @@ function renderChatContacts() {
 //  CHAT MEDIA — E2E encrypted file sharing
 // ──────────────────────────────────────────────────────────
 
-function fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
-}
-function base64ToBlob(base64, mimeType) {
-    const byteChars = atob(base64);
-    const byteArrays = [];
-    for (let offset = 0; offset < byteChars.length; offset += 512) {
-        const slice = byteChars.slice(offset, offset + 512);
-        const byteNumbers = new Array(slice.length);
-        for (let i = 0; i < slice.length; i++) byteNumbers[i] = slice.charCodeAt(i);
-        byteArrays.push(new Uint8Array(byteNumbers));
-    }
-    return new Blob(byteArrays, { type: mimeType });
-}
+
 function base64ToArrayBuffer(base64) {
     const binary_string = window.atob(base64);
     const len = binary_string.length;
@@ -1100,7 +1061,7 @@ function renderMediaBubble(msg, index, bubbleId) {
     const size = media.fileSize ? formatBytes(media.fileSize) : '—';
 
     return `<div class="media-bubble-content" id="${bubbleId}">
-        <div class="media-file-card" onclick="decryptAndShowMedia(${index}, '${bubbleId}')">
+        <div class="media-file-card" onclick="downloadHybridMedia(${index}, '${bubbleId}')">
             <div class="media-file-icon">${icon}</div>
             <div class="media-file-info">
                 <div class="media-file-name">${escapeHtml(name)}</div>

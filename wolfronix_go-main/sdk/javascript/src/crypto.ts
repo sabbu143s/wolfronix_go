@@ -3,6 +3,8 @@
  * Uses Web Crypto API (supported in modern browsers and Node.js 18+)
  */
 
+import * as bip39 from 'bip39';
+
 // Universal crypto access (works in both Browser and Node.js 18+)
 const getCrypto = (): Crypto => {
     if (typeof globalThis.crypto !== 'undefined') {
@@ -12,6 +14,21 @@ const getCrypto = (): Crypto => {
         'Web Crypto API not available. Requires a modern browser or Node.js 18+.'
     );
 };
+
+/**
+ * Generate a 24-word BIP39 mnemonic recovery phrase
+ * Uses 256-bit entropy for maximum security (24 words)
+ */
+export function generateMnemonic(): string {
+    return bip39.generateMnemonic(256);
+}
+
+/**
+ * Validate a BIP39 mnemonic recovery phrase
+ */
+export function validateMnemonic(mnemonic: string): boolean {
+    return bip39.validateMnemonic(mnemonic);
+}
 
 // Key constants
 const RSA_ALG = {

@@ -19,7 +19,9 @@ import {
   rsaDecrypt,
   rsaDecryptBase64,
   exportSessionKey,
-  importSessionKey
+  importSessionKey,
+  generateMnemonic,
+  validateMnemonic
 } from './crypto';
 
 // ============================================================================
@@ -46,6 +48,8 @@ export interface AuthResponse {
   user_id: string;
   token: string;
   message: string;
+  /** BIP39 recovery phrase (only returned from register()) */
+  recovery_phrase?: string;
 }
 
 export interface EncryptResponse {
@@ -495,11 +499,12 @@ export class Wolfronix {
   // ==========================================================================
 
   /**
-   * Register a new user
+   * Register a new user with BIP39 recovery phrase backup
    * 
    * @example
    * ```typescript
-   * const { user_id, token } = await wfx.register('user@example.com', 'password123');
+   * const result = await wfx.register('user@example.com', 'password123');
+   * console.log('Save your recovery phrase:', result.recovery_phrase);
    * ```
    */
   async register(email: string, password: string): Promise<AuthResponse> {
@@ -513,17 +518,23 @@ export class Wolfronix {
     // 2. Export Public Key
     const publicKeyPEM = await exportKeyToPEM(keyPair.publicKey, 'public');
 
-    // 3. Wrap Private Key
+    // 3. Wrap Private Key with password
     const { encryptedKey, salt } = await wrapPrivateKey(keyPair.privateKey, password);
 
-    // 4. Register with Server (Zero-Knowledge)
+    // 4. Generate BIP39 recovery phrase and create backup of private key
+    const mnemonic = generateMnemonic();
+    const { encryptedKey: backupKey, salt: backupSalt } = await wrapPrivateKey(keyPair.privateKey, mnemonic);
+
+    // 5. Register with Server (Zero-Knowledge — server never sees raw private key or mnemonic)
     const response = await this.request<AuthResponse>('POST', '/api/v1/keys/register', {
       body: {
         client_id: this.config.clientId,
-        user_id: email, // Using email as user_id for simplicity
+        user_id: email,
         public_key_pem: publicKeyPEM,
         encrypted_private_key: encryptedKey,
-        salt: salt
+        salt: salt,
+        backup_key: backupKey,
+        backup_salt: backupSalt
       },
       includeAuth: false
     });
@@ -534,8 +545,11 @@ export class Wolfronix {
       this.publicKey = keyPair.publicKey;
       this.privateKey = keyPair.privateKey;
       this.publicKeyPEM = publicKeyPEM;
-      this.token = 'zk-session'; // Local session marker (auth via X-Wolfronix-Key header)
+      this.token = 'zk-session';
     }
+
+    // Attach the recovery phrase so the developer can show it to the user
+    response.recovery_phrase = mnemonic;
 
     return response;
   }
@@ -592,6 +606,87 @@ export class Wolfronix {
     } catch (err) {
       throw new AuthenticationError('Invalid password (decryption failed)');
     }
+  }
+
+  /**
+   * Recover an account using a BIP39 recovery phrase and set a new password
+   * 
+   * @example
+   * ```typescript
+   * await wfx.recoverAccount('user@example.com', 'apple table horse ...', 'newPassword456');
+   * ```
+   */
+  async recoverAccount(email: string, recoveryPhrase: string, newPassword: string): Promise<AuthResponse> {
+    if (!email || !recoveryPhrase || !newPassword) {
+      throw new ValidationError('Email, recovery phrase, and new password are required');
+    }
+
+    if (!validateMnemonic(recoveryPhrase.trim())) {
+      throw new ValidationError('Invalid recovery phrase. Must be a valid BIP39 mnemonic.');
+    }
+
+    // 1. Fetch the backup key blob from the server
+    const backupRes = await this.request<any>('POST', '/api/v1/keys/recover', {
+      body: {
+        action: 'fetch_backup',
+        client_id: this.config.clientId,
+        user_id: email
+      },
+      includeAuth: false
+    });
+
+    if (!backupRes.backup_key || !backupRes.backup_salt) {
+      throw new AuthenticationError('No recovery backup found for this account');
+    }
+
+    // 2. Decrypt the backup key using the recovery phrase (client-side)
+    let recoveredPrivateKey: CryptoKey;
+    try {
+      recoveredPrivateKey = await unwrapPrivateKey(
+        backupRes.backup_key,
+        recoveryPhrase.trim(),
+        backupRes.backup_salt
+      );
+    } catch (err) {
+      throw new AuthenticationError('Recovery phrase is incorrect (decryption failed)');
+    }
+
+    // 3. Re-wrap the private key with the new password
+    const { encryptedKey: newEncryptedKey, salt: newSalt } = await wrapPrivateKey(recoveredPrivateKey, newPassword);
+
+    // 4. Send the new wrapped key to the server
+    await this.request<any>('POST', '/api/v1/keys/recover', {
+      body: {
+        action: 'update_password',
+        client_id: this.config.clientId,
+        user_id: email,
+        encrypted_private_key: newEncryptedKey,
+        salt: newSalt
+      },
+      includeAuth: false
+    });
+
+    // 5. Fetch the public key and set up session
+    const loginRes = await this.request<any>('POST', '/api/v1/keys/login', {
+      body: {
+        client_id: this.config.clientId,
+        user_id: email
+      },
+      includeAuth: false
+    });
+
+    this.privateKey = recoveredPrivateKey;
+    this.publicKeyPEM = loginRes.public_key_pem;
+    this.publicKey = await importKeyFromPEM(loginRes.public_key_pem, 'public');
+    this.userId = email;
+    this.token = 'zk-session';
+
+    return {
+      success: true,
+      user_id: email,
+      token: this.token,
+      message: 'Account recovered and password updated successfully'
+    };
   }
 
   /**

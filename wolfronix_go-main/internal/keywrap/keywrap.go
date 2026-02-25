@@ -26,8 +26,10 @@ type WrappedKey struct {
 	UserID           string    `json:"user_id"`
 	ClientID         string    `json:"client_id"`
 	PublicKeyPEM     string    `json:"public_key_pem"`
-	EncryptedPrivKey string    `json:"encrypted_private_key"` // Base64 encoded
+	EncryptedPrivKey string    `json:"encrypted_private_key"` // Base64 encoded (wrapped with password)
 	Salt             string    `json:"salt"`                  // Base64 encoded
+	BackupKey        string    `json:"backup_key,omitempty"`  // Base64 encoded (wrapped with BIP39 mnemonic)
+	BackupSalt       string    `json:"backup_salt,omitempty"` // Base64 encoded
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
@@ -56,6 +58,8 @@ func (s *KeyWrapStore) initDB() error {
 		public_key_pem TEXT NOT NULL,
 		encrypted_private_key TEXT NOT NULL,
 		salt VARCHAR(64) NOT NULL,
+		backup_key TEXT DEFAULT '',
+		backup_salt VARCHAR(64) DEFAULT '',
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		UNIQUE(client_id, user_id)
@@ -63,8 +67,15 @@ func (s *KeyWrapStore) initDB() error {
 
 	CREATE INDEX IF NOT EXISTS idx_user_keys_client_user ON user_keys(client_id, user_id);
 	`
-	_, err := s.db.Exec(query)
-	return err
+	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+
+	// Migration: add backup columns if they don't exist (safe for existing databases)
+	s.db.Exec(`ALTER TABLE user_keys ADD COLUMN IF NOT EXISTS backup_key TEXT DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE user_keys ADD COLUMN IF NOT EXISTS backup_salt VARCHAR(64) DEFAULT ''`)
+
+	return nil
 }
 
 // DeriveKeyFromPassword derives a 256-bit key from password using PBKDF2
@@ -162,25 +173,29 @@ func UnwrapPrivateKey(encryptedKeyB64 string, saltB64 string, password string) (
 	return string(plaintext), nil
 }
 
-// StoreWrappedKey stores a user's wrapped private key and public key
-func (s *KeyWrapStore) StoreWrappedKey(clientID, userID, publicKeyPEM, encryptedPrivKey, salt string) error {
+// StoreWrappedKey stores a user's wrapped private key, public key, and optional backup key
+func (s *KeyWrapStore) StoreWrappedKey(clientID, userID, publicKeyPEM, encryptedPrivKey, salt, backupKey, backupSalt string) error {
 	query := `
-		INSERT INTO user_keys (client_id, user_id, public_key_pem, encrypted_private_key, salt, updated_at)
-		VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+		INSERT INTO user_keys (client_id, user_id, public_key_pem, encrypted_private_key, salt, backup_key, backup_salt, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
 		ON CONFLICT (client_id, user_id) DO UPDATE SET
 			public_key_pem = $3,
 			encrypted_private_key = $4,
 			salt = $5,
+			backup_key = $6,
+			backup_salt = $7,
 			updated_at = CURRENT_TIMESTAMP
 	`
-	_, err := s.db.Exec(query, clientID, userID, publicKeyPEM, encryptedPrivKey, salt)
+	_, err := s.db.Exec(query, clientID, userID, publicKeyPEM, encryptedPrivKey, salt, backupKey, backupSalt)
 	return err
 }
 
 // GetWrappedKey retrieves a user's wrapped key data
 func (s *KeyWrapStore) GetWrappedKey(clientID, userID string) (*WrappedKey, error) {
 	query := `
-		SELECT user_id, client_id, public_key_pem, encrypted_private_key, salt, created_at, updated_at
+		SELECT user_id, client_id, public_key_pem, encrypted_private_key, salt,
+		       COALESCE(backup_key, ''), COALESCE(backup_salt, ''),
+		       created_at, updated_at
 		FROM user_keys
 		WHERE client_id = $1 AND user_id = $2
 	`
@@ -189,6 +204,7 @@ func (s *KeyWrapStore) GetWrappedKey(clientID, userID string) (*WrappedKey, erro
 	err := s.db.QueryRow(query, clientID, userID).Scan(
 		&wk.UserID, &wk.ClientID, &wk.PublicKeyPEM,
 		&wk.EncryptedPrivKey, &wk.Salt,
+		&wk.BackupKey, &wk.BackupSalt,
 		&wk.CreatedAt, &wk.UpdatedAt,
 	)
 
@@ -200,6 +216,34 @@ func (s *KeyWrapStore) GetWrappedKey(clientID, userID string) (*WrappedKey, erro
 	}
 
 	return wk, nil
+}
+
+// GetBackupKey retrieves only the backup key and salt for recovery
+func (s *KeyWrapStore) GetBackupKey(clientID, userID string) (backupKey, backupSalt string, err error) {
+	query := `SELECT COALESCE(backup_key, ''), COALESCE(backup_salt, '') FROM user_keys WHERE client_id = $1 AND user_id = $2`
+	err = s.db.QueryRow(query, clientID, userID).Scan(&backupKey, &backupSalt)
+	if err == sql.ErrNoRows {
+		return "", "", errors.New("user not found")
+	}
+	return
+}
+
+// UpdatePasswordWrappedKey updates the password-wrapped key after a recovery (re-wrap with new password)
+func (s *KeyWrapStore) UpdatePasswordWrappedKey(clientID, userID, newEncryptedPrivKey, newSalt string) error {
+	query := `
+		UPDATE user_keys
+		SET encrypted_private_key = $3, salt = $4, updated_at = CURRENT_TIMESTAMP
+		WHERE client_id = $1 AND user_id = $2
+	`
+	result, err := s.db.Exec(query, clientID, userID, newEncryptedPrivKey, newSalt)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return errors.New("user not found")
+	}
+	return nil
 }
 
 // GetPublicKey retrieves only the public key for a user
@@ -229,7 +273,9 @@ func (s *KeyWrapStore) DeleteUserKeys(clientID, userID string) error {
 // ListUserKeys lists all users with keys for a client
 func (s *KeyWrapStore) ListUserKeys(clientID string) ([]WrappedKey, error) {
 	query := `
-		SELECT user_id, client_id, public_key_pem, encrypted_private_key, salt, created_at, updated_at
+		SELECT user_id, client_id, public_key_pem, encrypted_private_key, salt,
+		       COALESCE(backup_key, ''), COALESCE(backup_salt, ''),
+		       created_at, updated_at
 		FROM user_keys
 		WHERE client_id = $1
 		ORDER BY created_at DESC
@@ -247,6 +293,7 @@ func (s *KeyWrapStore) ListUserKeys(clientID string) ([]WrappedKey, error) {
 		err := rows.Scan(
 			&wk.UserID, &wk.ClientID, &wk.PublicKeyPEM,
 			&wk.EncryptedPrivKey, &wk.Salt,
+			&wk.BackupKey, &wk.BackupSalt,
 			&wk.CreatedAt, &wk.UpdatedAt,
 		)
 		if err != nil {
