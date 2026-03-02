@@ -1,0 +1,15 @@
+2026/03/02 15:48:25 🔑 Crypto System Initialized.
+2026/03/02 15:48:25 ⚠️  ADMIN_API_KEY not set — admin endpoints will reject all requests
+2026/03/02 15:48:25 ⚠️ DB Connection Failed: dial tcp: lookup port=: no such host
+2026/03/02 15:48:25 🗄️ Enterprise Mode: No local storage tables needed.
+2026/03/02 15:48:25 🗄️ Core Database Tables Initialized!
+2026/03/02 15:48:25 ⚠️ Metrics Store Init Failed: dial tcp: lookup port=: no such host
+2026/03/02 15:48:25 ⚠️ KeyWrap Store Init Failed: dial tcp: lookup port=: no such host
+2026/03/02 15:48:25 ⚠️ Client Registry Init Failed: dial tcp: lookup port=: no such host
+2026/03/02 15:48:25 🔌 Client DB Connector Ready!
+2026/03/02 15:48:25 🎭 Fake Data Generator Initialized!
+2026/03/02 15:48:25 ✅ Message encryption subsystem initialized (key TTL: 24h0m0s )
+2026/03/02 15:48:25 🚀 Wolfronix Cloud Engine Running on :5001 (HTTPS)
+2026/03/02 16:12:44 
+⏳ Shutting down gracefully...
+2026/03/02 16:12:44 ✅ Server stopped cleanly

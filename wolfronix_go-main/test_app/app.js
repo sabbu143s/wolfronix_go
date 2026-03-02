@@ -18,7 +18,7 @@ function initClient() {
         wfx = new WolfronixSDK.default({
             baseUrl: 'https://49.206.202.13:9443/',
             clientId: 'wolfronix_client_1',
-            wolfronixKey: 'c07836e1f33c9d1ccdd099e26643e9fc5449c2a490380fef5b446b208c10eda6',
+            wolfronixKey: 'c48b9feb31920c80a62a95eac2b9cb86fe8888b6169fe1d37ea9fe39d0172fd3',
             insecure: true,
             timeout: 30000,
             retries: 3

@@ -1,0 +1,347 @@
+Metadata-Version: 2.4
+Name: wolfronix-sdk
+Version: 1.0.0
+Summary: Official Wolfronix SDK for Python — Zero-knowledge encryption made simple
+Author: Wolfronix Team
+License: MIT
+Project-URL: Homepage, https://wolfronix.com
+Project-URL: Documentation, https://wolfronix.com/docs/sdk/python
+Project-URL: Repository, https://github.com/wolfronix/sdk-python
+Project-URL: Issues, https://github.com/wolfronix/sdk-python/issues
+Keywords: wolfronix,encryption,security,zero-knowledge,aes-256,file-encryption,crypto,privacy
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Security :: Cryptography
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Typing :: Typed
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: httpx>=0.25.0
+Requires-Dist: cryptography>=41.0.0
+Provides-Extra: websocket
+Requires-Dist: websockets>=12.0; extra == "websocket"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21; extra == "dev"
+Requires-Dist: respx>=0.20; extra == "dev"
+Requires-Dist: websockets>=12.0; extra == "dev"
+Dynamic: license-file
+
+# Wolfronix SDK for Python
+
+> Official Python SDK for [Wolfronix](https://wolfronix.com) — Zero-knowledge encryption made simple.
+
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+## Installation
+
+```bash
+pip install wolfronix-sdk
+```
+
+For WebSocket streaming support:
+
+```bash
+pip install wolfronix-sdk[websocket]
+```
+
+## Quick Start
+
+```python
+import asyncio
+from wolfronix import Wolfronix, WolfronixConfig
+
+async def main():
+    # Initialize client
+    wfx = Wolfronix(WolfronixConfig(
+        base_url="https://your-wolfronix-server:9443",
+        client_id="your_client_id",
+        wolfronix_key="your_wolfronix_key",
+        insecure=True,  # For self-signed certs
+    ))
+
+    # Health check
+    healthy = await wfx.health_check()
+    print(f"Server healthy: {healthy}")
+
+    # Register a new user
+    result = await wfx.register("user@example.com", "secure_password")
+    print(f"Registered: {result.user_id}")
+
+    # Or login with existing credentials
+    result = await wfx.login("user@example.com", "secure_password")
+    print(f"Logged in: {result.user_id}")
+
+    # Encrypt a file
+    with open("document.pdf", "rb") as f:
+        enc = await wfx.encrypt(f.read(), filename="document.pdf")
+    print(f"Encrypted! File ID: {enc.file_id}")
+
+    # Decrypt a file
+    decrypted_bytes = await wfx.decrypt(enc.file_id)
+    with open("decrypted.pdf", "wb") as f:
+        f.write(decrypted_bytes)
+
+    # List files
+    files = await wfx.list_files()
+    for f in files.files:
+        print(f"  {f.original_name} (ID: {f.file_id})")
+
+asyncio.run(main())
+```
+
+## Features
+
+### Authentication (Zero-Knowledge)
+
+```python
+# Register — generates RSA-2048 keys client-side, wraps private key with password
+result = await wfx.register("user@example.com", "password123")
+
+# Login — fetches wrapped key, unwraps client-side (server never sees raw private key)
+result = await wfx.login("user@example.com", "password123")
+
+# Direct token auth (for server-side apps)
+wfx.set_token("jwt-token", "user-id")
+
+# Logout (clears keys from memory)
+wfx.logout()
+```
+
+### File Encryption (4-Layer Architecture)
+
+```python
+# Encrypt
+with open("secret.pdf", "rb") as f:
+    result = await wfx.encrypt(f.read(), filename="secret.pdf")
+print(f"File ID: {result.file_id}, Time: {result.enc_time_ms}ms")
+
+# Decrypt (zero-knowledge flow — private key never leaves client)
+data = await wfx.decrypt(result.file_id)
+with open("decrypted.pdf", "wb") as f:
+    f.write(data)
+
+# List all files
+files = await wfx.list_files()
+
+# Delete a file
+await wfx.delete_file(result.file_id)
+```
+
+### E2E Chat Encryption (RSA + AES Hybrid)
+
+```python
+# Encrypt a message for a recipient
+packet = await wfx.encrypt_message("Hello, Bob!", "bob@example.com")
+# Send `packet` (JSON string) via your chat transport
+
+# Decrypt a received message
+plaintext = await wfx.decrypt_message(packet)
+print(plaintext)  # "Hello, Bob!"
+```
+
+### Server-Side Message Encryption (Dual-Key Split)
+
+```python
+# Layer 4 (default) — server splits key, you get key_part_a
+result = await wfx.server_encrypt("Sensitive message")
+
+# Decrypt with your key_part_a
+from wolfronix import ServerDecryptParams
+text = await wfx.server_decrypt(ServerDecryptParams(
+    encrypted_message=result.encrypted_message,
+    nonce=result.nonce,
+    key_part_a=result.key_part_a,
+    message_tag=result.message_tag,
+))
+
+# Batch encryption (up to 100 messages, single round-trip)
+batch = await wfx.server_encrypt_batch([
+    {"id": "msg1", "message": "Hello"},
+    {"id": "msg2", "message": "World"},
+])
+
+# Decrypt batch items
+text1 = await wfx.server_decrypt_batch_item(batch, 0)
+text2 = await wfx.server_decrypt_batch_item(batch, 1)
+```
+
+### WebSocket Streaming Encryption
+
+> Requires `pip install wolfronix-sdk[websocket]`
+
+```python
+# Encrypt stream
+stream = await wfx.create_stream("encrypt")
+enc1 = await stream.send("Chunk 1 data")
+enc2 = await stream.send("Chunk 2 data")
+summary = await stream.end()
+print(f"Processed {summary['chunks_processed']} chunks")
+
+# Save stream.key_part_a and stream.stream_tag for decryption
+
+# Decrypt stream
+dec_stream = await wfx.create_stream("decrypt", {
+    "key_part_a": stream.key_part_a,
+    "stream_tag": stream.stream_tag,
+})
+plain1 = await dec_stream.send(enc1)
+plain2 = await dec_stream.send(enc2)
+await dec_stream.end()
+```
+
+### Enterprise Admin Client
+
+```python
+from wolfronix import WolfronixAdmin, WolfronixAdminConfig
+
+admin = WolfronixAdmin(WolfronixAdminConfig(
+    base_url="https://wolfronix-server:9443",
+    admin_key="your-admin-api-key",
+    insecure=True,
+))
+
+# Register a client with managed Supabase connector
+result = await admin.register_client({
+    "client_id": "acme_corp",
+    "client_name": "Acme Corporation",
+    "db_type": "supabase",
+    "db_config": '{"supabase_url": "https://xxx.supabase.co", "supabase_service_key": "eyJ..."}',
+})
+print(f"Wolfronix key: {result.wolfronix_key}")
+
+# Register with custom API
+result = await admin.register_client({
+    "client_id": "my_app",
+    "client_name": "My Application",
+    "db_type": "custom_api",
+    "api_endpoint": "https://my-storage-api.com",
+})
+
+# List all clients
+clients = await admin.list_clients()
+for c in clients.clients:
+    print(f"  {c.client_id} ({c.db_type}) — active: {c.is_active}")
+
+# Get / update / deactivate
+client = await admin.get_client("acme_corp")
+await admin.update_client("acme_corp", {"db_config": '{"new": "config"}'})
+await admin.deactivate_client("acme_corp")
+```
+
+### Metrics
+
+```python
+metrics = await wfx.get_metrics()
+print(f"Total encryptions: {metrics.total_encryptions}")
+print(f"Total decryptions: {metrics.total_decryptions}")
+```
+
+## Crypto Utilities
+
+You can use the low-level crypto functions directly:
+
+```python
+from wolfronix.crypto import (
+    generate_key_pair,
+    export_key_to_pem,
+    import_key_from_pem,
+    wrap_private_key,
+    unwrap_private_key,
+    generate_session_key,
+    encrypt_data,
+    decrypt_data,
+    rsa_encrypt,
+    rsa_decrypt,
+)
+
+# Generate RSA-2048 key pair
+keys = generate_key_pair()
+pub_pem = export_key_to_pem(keys.public_key, "public")
+priv_pem = export_key_to_pem(keys.private_key, "private")
+
+# Wrap private key with password (PBKDF2 + AES-256-GCM)
+wrapped = wrap_private_key(keys.private_key, "my_password")
+# wrapped.encrypted_key (base64), wrapped.salt (hex)
+
+# Unwrap private key
+private_key = unwrap_private_key(wrapped.encrypted_key, "my_password", wrapped.salt)
+
+# AES-256-GCM encryption
+session_key = generate_session_key()
+encrypted, iv = encrypt_data("Hello, World!", session_key)
+plaintext = decrypt_data(encrypted, iv, session_key)
+
+# RSA-OAEP encryption
+ciphertext = rsa_encrypt(b"secret data", keys.public_key)
+plaintext_bytes = rsa_decrypt(ciphertext, keys.private_key)
+```
+
+## Security Architecture
+
+| Layer | Protection | Implementation |
+|-------|-----------|----------------|
+| Layer 1 | Fake data generation | Synthetic PAN, Aadhaar, SSN for dev/test |
+| Layer 2 | RBAC masking | Role-based partial/full data masking |
+| Layer 3 | AES-256-GCM encryption | Server-side symmetric encryption |
+| Layer 4 | Dual-key RSA split | RSA-2048 OAEP — key split between client & server |
+
+**Zero-Knowledge Design:** Your private key is never stored on or transmitted to the server. It's wrapped with your password client-side using PBKDF2 (100,000 iterations) + AES-256-GCM before upload.
+
+## Error Handling
+
+```python
+from wolfronix.errors import (
+    WolfronixError,
+    AuthenticationError,
+    ValidationError,
+    NetworkError,
+    PermissionDeniedError,
+)
+
+try:
+    await wfx.login("user@example.com", "wrong_password")
+except AuthenticationError as e:
+    print(f"Auth failed: {e}")
+except NetworkError as e:
+    print(f"Network error: {e}")
+except WolfronixError as e:
+    print(f"Error [{e.code}]: {e} (HTTP {e.status_code})")
+```
+
+## API Parity with JavaScript SDK
+
+This Python SDK mirrors the [JavaScript/TypeScript SDK](../javascript/) 1:1:
+
+| JavaScript | Python |
+|-----------|--------|
+| `new Wolfronix(config)` | `Wolfronix(WolfronixConfig(...))` |
+| `wfx.register(email, pass)` | `await wfx.register(email, pass)` |
+| `wfx.login(email, pass)` | `await wfx.login(email, pass)` |
+| `wfx.encrypt(file, name)` | `await wfx.encrypt(data, filename=name)` |
+| `wfx.decrypt(fileId)` | `await wfx.decrypt(file_id)` |
+| `wfx.encryptMessage(text, id)` | `await wfx.encrypt_message(text, id)` |
+| `wfx.serverEncrypt(msg)` | `await wfx.server_encrypt(msg)` |
+| `wfx.createStream(dir)` | `await wfx.create_stream(dir)` |
+| `new WolfronixAdmin(config)` | `WolfronixAdmin(WolfronixAdminConfig(...))` |
+| `admin.registerClient(...)` | `await admin.register_client(...)` |
+
+## Requirements
+
+- Python 3.9+
+- `httpx` >= 0.25.0
+- `cryptography` >= 41.0.0
+- `websockets` >= 12.0 (optional, for streaming)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
