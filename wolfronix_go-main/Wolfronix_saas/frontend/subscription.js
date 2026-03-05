@@ -1,5 +1,8 @@
 
-const API_BASE = "/api";
+const API_BASE =
+    window.WOLFRONIX_API_BASE ||
+    localStorage.getItem("WOLFRONIX_API_BASE") ||
+    "http://localhost:5000/api";
 
 async function loadSubscriptionData() {
     const token = localStorage.getItem("token");

@@ -287,6 +287,11 @@ func messageDecryptHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := r.Header.Get("X-User-ID")
+	if userID == "" {
+		userID = req.UserID
+	}
+
 	if req.EncryptedMessage == "" || req.Nonce == "" || req.KeyPartA == "" {
 		http.Error(w, `{"error": "encrypted_message, nonce, and key_part_a are required"}`, 400)
 		return
@@ -324,6 +329,10 @@ func messageDecryptHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error": "Access denied"}`, 403)
 			return
 		}
+		if userID != "" && entry.userID != "" && entry.userID != userID {
+			http.Error(w, `{"error": "Access denied"}`, 403)
+			return
+		}
 		if len(keyPartA) != 16 {
 			http.Error(w, `{"error": "Invalid key_part_a length for Layer 4 (expected 16 bytes)"}`, 400)
 			return
@@ -348,7 +357,7 @@ func messageDecryptHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if metricsStore != nil {
-		metricsStore.RecordDecryption(clientID, req.UserID, time.Since(start).Milliseconds(), 1, int64(len(plaintext)))
+		metricsStore.RecordDecryption(clientID, userID, time.Since(start).Milliseconds(), 1, int64(len(plaintext)))
 	}
 
 	w.Header().Set("Content-Type", "application/json")

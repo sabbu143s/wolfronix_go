@@ -199,6 +199,17 @@ func (s *MetricsStore) RecordUserLogin(clientID, userID string) error {
 	return err
 }
 
+// GetUserRole returns a user's role from server-side registry.
+func (s *MetricsStore) GetUserRole(clientID, userID string) (string, error) {
+	query := `SELECT role FROM client_users WHERE client_id = $1 AND user_id = $2 AND is_active = true`
+	var role string
+	err := s.db.QueryRow(query, clientID, userID).Scan(&role)
+	if err != nil {
+		return "", err
+	}
+	return role, nil
+}
+
 // GetClientMetrics returns metrics for a specific client
 func (s *MetricsStore) GetClientMetrics(clientID string) (*ClientMetrics, error) {
 	// Check cache first

@@ -83,13 +83,13 @@ func main() {
 	fmt.Printf("   ✅ Found %d file(s)\n", len(files))
 
 	// Test 5: Decrypt a file
-	fmt.Println("\n5️⃣  Testing POST /api/v1/decrypt...")
+	fmt.Println("\n5️⃣  Testing GET /api/v1/files/{id}/key...")
 	if fileID != "" {
-		err := decryptFile(fileID)
+		err := getFileKey(fileID)
 		if err != nil {
 			fmt.Printf("   ❌ Failed: %v\n", err)
 		} else {
-			fmt.Println("   ✅ File decrypted successfully")
+			fmt.Println("   ✅ Retrieved encrypted key part successfully")
 		}
 	} else {
 		fmt.Println("   ⏭️  Skipped (no file ID)")
@@ -241,15 +241,11 @@ func listFiles() ([]interface{}, error) {
 	return result, nil
 }
 
-func decryptFile(fileID string) error {
-	payload := map[string]string{"file_id": fileID}
-	jsonBody, _ := json.Marshal(payload)
-
-	req, err := newRequest("POST", testBaseURL+"/api/v1/decrypt", bytes.NewReader(jsonBody))
+func getFileKey(fileID string) error {
+	req, err := newRequest("GET", testBaseURL+"/api/v1/files/"+fileID+"/key", nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -260,6 +256,14 @@ func decryptFile(fileID string) error {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if _, ok := result["key_part_a"]; !ok {
+		return fmt.Errorf("missing key_part_a in response")
 	}
 	return nil
 }

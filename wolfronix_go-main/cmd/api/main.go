@@ -172,6 +172,10 @@ func main() {
 	r.HandleFunc("/api/v1/keys/login", loginFetchKeysHandler).Methods("POST", "OPTIONS")
 	// Get public key for a user (for encrypting data for them)
 	r.HandleFunc("/api/v1/keys/public/{clientID}/{userID}", getPublicKeyHandler).Methods("GET", "OPTIONS")
+	// Recovery: Fetch recovery-wrapped key for client-side recovery
+	r.HandleFunc("/api/v1/keys/recover", recoverUserKeysHandler).Methods("POST", "OPTIONS")
+	// Update password-wrapped key after recovery
+	r.HandleFunc("/api/v1/keys/update-password", updatePasswordHandler).Methods("POST", "OPTIONS")
 
 	// Metrics Routes
 	r.HandleFunc("/api/v1/metrics/summary", getMetricsSummaryHandler).Methods("GET", "OPTIONS")
@@ -233,6 +237,7 @@ func main() {
 
 func encryptHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	const maxDirectEncryptSize int64 = 128 << 20 // 128MB; use resumable chunk uploads for larger files
 
 	// Allow files up to 4 GB (memory threshold 512MB, rest spills to temp disk)
 	err := r.ParseMultipartForm(512 << 20)
@@ -249,6 +254,12 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+
+	// This endpoint performs one-shot in-memory encryption, so cap size to avoid OOM.
+	if header.Size > 0 && header.Size > maxDirectEncryptSize {
+		http.Error(w, `{"error": "File too large for direct encrypt endpoint. Use resumable chunk upload."}`, http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	clientPubKey := r.FormValue("client_public_key")
 	if clientPubKey == "" {
@@ -307,10 +318,14 @@ func encryptHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read entire file for authenticated encryption
-	plaintext, err := io.ReadAll(file)
+	plaintext, err := io.ReadAll(io.LimitReader(file, maxDirectEncryptSize+1))
 	if err != nil {
 		log.Printf("❌ Failed to read file: %v", err)
 		http.Error(w, `{"error": "Read error"}`, 500)
+		return
+	}
+	if int64(len(plaintext)) > maxDirectEncryptSize {
+		http.Error(w, `{"error": "File too large for direct encrypt endpoint. Use resumable chunk upload."}`, http.StatusRequestEntityTooLarge)
 		return
 	}
 	totalSize := int64(len(plaintext))
@@ -531,10 +546,14 @@ func decryptStoredHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userRole := r.Header.Get("X-User-Role")
-	if userRole == "" {
-		userRole = decryptReq.UserRole
+	if userRole == "" && metricsStore != nil {
+		// Resolve role from server-side user registry when available.
+		if role, roleErr := metricsStore.GetUserRole(clientID, userID); roleErr == nil && role != "" {
+			userRole = role
+		}
 	}
 	if userRole == "" {
+		// Do not trust role from request body.
 		userRole = "guest"
 	}
 
@@ -1616,11 +1635,13 @@ func registerUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ClientID            string `json:"client_id"`
-		UserID              string `json:"user_id"`
-		PublicKeyPEM        string `json:"public_key_pem"`
-		EncryptedPrivateKey string `json:"encrypted_private_key"` // Already wrapped by browser
-		Salt                string `json:"salt"`                  // Salt used for wrapping
+		ClientID                    string `json:"client_id"`
+		UserID                      string `json:"user_id"`
+		PublicKeyPEM                string `json:"public_key_pem"`
+		EncryptedPrivateKey         string `json:"encrypted_private_key"`          // Already wrapped by browser
+		Salt                        string `json:"salt"`                           // Salt used for wrapping
+		RecoveryEncryptedPrivateKey string `json:"recovery_encrypted_private_key"` // Optional recovery-wrapped private key
+		RecoverySalt                string `json:"recovery_salt"`                  // Optional recovery salt
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1633,8 +1654,33 @@ func registerUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the wrapped key (we never see the raw private key!)
-	err := keyWrapStore.StoreWrappedKey(req.ClientID, req.UserID, req.PublicKeyPEM, req.EncryptedPrivateKey, req.Salt)
+	// Registration is create-only to prevent silent key replacement attacks.
+	// Existing users must use dedicated recovery/update flows.
+	existing, err := keyWrapStore.GetWrappedKey(req.ClientID, req.UserID)
+	if err != nil {
+		http.Error(w, `{"error": "failed to check existing keys"}`, http.StatusInternalServerError)
+		return
+	}
+	if existing != nil {
+		http.Error(w, `{"error": "keys already registered for this user. Use recovery/update endpoints."}`, http.StatusConflict)
+		return
+	}
+
+	// Store wrapped key(s); raw private key never reaches the server.
+	err = nil
+	if req.RecoveryEncryptedPrivateKey != "" && req.RecoverySalt != "" {
+		err = keyWrapStore.StoreWrappedKeyWithRecovery(
+			req.ClientID,
+			req.UserID,
+			req.PublicKeyPEM,
+			req.EncryptedPrivateKey,
+			req.Salt,
+			req.RecoveryEncryptedPrivateKey,
+			req.RecoverySalt,
+		)
+	} else {
+		err = keyWrapStore.StoreWrappedKey(req.ClientID, req.UserID, req.PublicKeyPEM, req.EncryptedPrivateKey, req.Salt)
+	}
 	if err != nil {
 		log.Printf("❌ Failed to store wrapped key: %v", err)
 		http.Error(w, `{"error": "failed to store keys"}`, http.StatusInternalServerError)
@@ -1704,6 +1750,101 @@ func loginFetchKeysHandler(w http.ResponseWriter, r *http.Request) {
 		"public_key_pem":        wrappedKey.PublicKeyPEM,
 		"encrypted_private_key": wrappedKey.EncryptedPrivKey,
 		"salt":                  wrappedKey.Salt,
+	})
+}
+
+// recoverUserKeysHandler returns the recovery-wrapped key for client-side recovery
+// POST /api/v1/keys/recover
+// Client sends email, receives recovery-wrapped private key to unwrap with mnemonic
+func recoverUserKeysHandler(w http.ResponseWriter, r *http.Request) {
+	if keyWrapStore == nil {
+		http.Error(w, `{"error": "key management not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		ClientID string `json:"client_id"`
+		UserID   string `json:"user_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.ClientID == "" || req.UserID == "" {
+		http.Error(w, `{"error": "client_id and user_id are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	wrappedKey, err := keyWrapStore.GetWrappedKey(req.ClientID, req.UserID)
+	if err != nil {
+		log.Printf("❌ Failed to fetch recovery key: %v", err)
+		http.Error(w, `{"error": "failed to fetch keys"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if wrappedKey == nil {
+		http.Error(w, `{"error": "user not found"}`, http.StatusNotFound)
+		return
+	}
+
+	if wrappedKey.RecoveryEncryptedPrivKey == "" || wrappedKey.RecoverySalt == "" {
+		http.Error(w, `{"error": "no recovery key set for this user"}`, http.StatusNotFound)
+		return
+	}
+
+	log.Printf("🔑 Recovery: Sent recovery-wrapped key to user %s for client-side unwrapping", req.UserID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":                         "success",
+		"message":                        "Use your recovery phrase to decrypt the private key",
+		"public_key_pem":                 wrappedKey.PublicKeyPEM,
+		"recovery_encrypted_private_key": wrappedKey.RecoveryEncryptedPrivKey,
+		"recovery_salt":                  wrappedKey.RecoverySalt,
+	})
+}
+
+// updatePasswordHandler updates the password-wrapped key after recovery
+// POST /api/v1/keys/update-password
+// Client sends new password-wrapped key to replace the old one
+func updatePasswordHandler(w http.ResponseWriter, r *http.Request) {
+	if keyWrapStore == nil {
+		http.Error(w, `{"error": "key management not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		ClientID            string `json:"client_id"`
+		UserID              string `json:"user_id"`
+		EncryptedPrivateKey string `json:"encrypted_private_key"` // New password-wrapped key
+		Salt                string `json:"salt"`                  // New salt
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.ClientID == "" || req.UserID == "" || req.EncryptedPrivateKey == "" || req.Salt == "" {
+		http.Error(w, `{"error": "client_id, user_id, encrypted_private_key, and salt are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	err := keyWrapStore.UpdatePasswordWrappedKey(req.ClientID, req.UserID, req.EncryptedPrivateKey, req.Salt)
+	if err != nil {
+		log.Printf("❌ Failed to update password-wrapped key: %v", err)
+		http.Error(w, `{"error": "failed to update key"}`, http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("🔄 Recovery: Updated password-wrapped key for user %s (client: %s)", req.UserID, req.ClientID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Password updated successfully. You can now log in with the new password.",
 	})
 }
 
