@@ -16,12 +16,18 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import random
 import time
 from io import BytesIO
 from typing import Any, BinaryIO, Dict, List, Optional, Union
 from urllib.parse import quote
 
 import httpx
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .crypto import (
     decrypt_data,
@@ -60,6 +66,63 @@ from .types import (
     ServerEncryptResult,
     WolfronixConfig,
 )
+
+PFS_PROTOCOL = "wfx-dr-v1"
+ZERO_32 = b"\x00" * 32
+RECOVERY_WORDS = [
+    "able", "about", "absorb", "access", "acid", "across", "action", "adapt", "admit", "adult",
+    "agent", "agree", "ahead", "air", "alert", "alpha", "anchor", "angle", "apple", "arch",
+    "arena", "argue", "armed", "arrow", "asset", "atlas", "attack", "audio", "august", "auto",
+    "avoid", "awake", "aware", "badge", "balance", "banana", "basic", "beach", "beauty", "before",
+    "begin", "below", "benefit", "best", "beyond", "bicycle", "bird", "black", "bless", "board",
+    "bold", "bonus", "border", "borrow", "bottle", "bottom", "brain", "brand", "brave", "breeze",
+]
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    pad = "=" * ((4 - (len(data) % 4)) % 4)
+    return base64.urlsafe_b64decode((data + pad).encode("utf-8"))
+
+
+def _int_to_b64url(n: int, size: int = 32) -> str:
+    return _b64url_encode(n.to_bytes(size, "big"))
+
+
+def _b64url_to_int(s: str) -> int:
+    return int.from_bytes(_b64url_decode(s), "big")
+
+
+def _to_base64(data: bytes) -> str:
+    return base64.b64encode(data).decode("utf-8")
+
+
+def _from_base64(data: str) -> bytes:
+    return base64.b64decode(data.encode("utf-8"))
+
+
+def _normalize_jwk(jwk: Dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "kty": jwk.get("kty", ""),
+            "crv": jwk.get("crv", ""),
+            "x": jwk.get("x", ""),
+            "y": jwk.get("y", ""),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _ratchet_key_id(jwk: Dict[str, Any], n: int) -> str:
+    return f"{_to_base64(_normalize_jwk(jwk).encode('utf-8'))}:{n}"
+
+
+def _generate_recovery_words(count: int = 24) -> List[str]:
+    return [random.choice(RECOVERY_WORDS) for _ in range(count)]
 
 
 class Wolfronix:
@@ -101,6 +164,11 @@ class Wolfronix:
         self._public_key = None  # RSAPublicKey
         self._private_key = None  # RSAPrivateKey
         self._public_key_pem: Optional[str] = None
+
+        # PFS (double-ratchet style) local state
+        self._pfs_identity_private_jwk: Optional[Dict[str, Any]] = None
+        self._pfs_identity_public_jwk: Optional[Dict[str, Any]] = None
+        self._pfs_sessions: Dict[str, Dict[str, Any]] = {}
 
     # ──────────────────────────────────────────────────────────────────────────
     # Properties
@@ -249,11 +317,124 @@ class Wolfronix:
                 "Not authenticated. Call login() or register() first."
             )
 
+    def _export_pfs_public_jwk(self, public_key: ec.EllipticCurvePublicKey) -> Dict[str, Any]:
+        nums = public_key.public_numbers()
+        return {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": _int_to_b64url(nums.x),
+            "y": _int_to_b64url(nums.y),
+        }
+
+    def _export_pfs_private_jwk(self, private_key: ec.EllipticCurvePrivateKey) -> Dict[str, Any]:
+        nums = private_key.private_numbers()
+        out = self._export_pfs_public_jwk(private_key.public_key())
+        out["d"] = _int_to_b64url(nums.private_value)
+        return out
+
+    def _import_pfs_public_jwk(self, jwk: Dict[str, Any]) -> ec.EllipticCurvePublicKey:
+        x = _b64url_to_int(jwk["x"])
+        y = _b64url_to_int(jwk["y"])
+        numbers = ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1())
+        return numbers.public_key()
+
+    def _import_pfs_private_jwk(self, jwk: Dict[str, Any]) -> ec.EllipticCurvePrivateKey:
+        d = _b64url_to_int(jwk["d"])
+        return ec.derive_private_key(d, ec.SECP256R1())
+
+    def _derive_ecdh_secret(self, private_jwk: Dict[str, Any], public_jwk: Dict[str, Any]) -> bytes:
+        priv = self._import_pfs_private_jwk(private_jwk)
+        pub = self._import_pfs_public_jwk(public_jwk)
+        return priv.exchange(ec.ECDH(), pub)
+
+    def _hkdf_expand(self, ikm: bytes, salt: bytes, info: str, out_len: int) -> bytes:
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=out_len,
+            salt=salt,
+            info=info.encode("utf-8"),
+        )
+        return hkdf.derive(ikm)
+
+    def _hmac_sha256(self, key_raw: bytes, input_text: str) -> bytes:
+        h = hmac.HMAC(key_raw, hashes.SHA256())
+        h.update(input_text.encode("utf-8"))
+        return h.finalize()
+
+    def _derive_root_and_chains(self, root_key_b64: str, dh_secret: bytes) -> Dict[str, str]:
+        root_key_raw = _from_base64(root_key_b64) if root_key_b64 else ZERO_32
+        mixed = self._hkdf_expand(dh_secret, root_key_raw, f"{PFS_PROTOCOL}:root", 96)
+        return {
+            "root_key": _to_base64(mixed[:32]),
+            "chain_a": _to_base64(mixed[32:64]),
+            "chain_b": _to_base64(mixed[64:96]),
+        }
+
+    def _derive_message_key(self, chain_key_b64: str, n: int) -> bytes:
+        return self._hmac_sha256(_from_base64(chain_key_b64), f"msg:{n}")
+
+    def _derive_next_chain_key(self, chain_key_b64: str) -> str:
+        return _to_base64(self._hmac_sha256(_from_base64(chain_key_b64), "chain"))
+
+    def _encrypt_with_raw_key(self, raw_key: bytes, plaintext: str) -> Dict[str, str]:
+        iv = os.urandom(12)
+        out = AESGCM(raw_key).encrypt(iv, plaintext.encode("utf-8"), None)
+        return {"ciphertext": _to_base64(out), "iv": _to_base64(iv)}
+
+    def _decrypt_with_raw_key(self, raw_key: bytes, ciphertext_b64: str, iv_b64: str) -> str:
+        out = AESGCM(raw_key).decrypt(_from_base64(iv_b64), _from_base64(ciphertext_b64), None)
+        return out.decode("utf-8")
+
+    def _ensure_pfs_identity(self) -> None:
+        if self._pfs_identity_private_jwk and self._pfs_identity_public_jwk:
+            return
+        priv = ec.generate_private_key(ec.SECP256R1())
+        self._pfs_identity_private_jwk = self._export_pfs_private_jwk(priv)
+        self._pfs_identity_public_jwk = self._export_pfs_public_jwk(priv.public_key())
+
+    def _get_pfs_session(self, session_id: str) -> Dict[str, Any]:
+        session = self._pfs_sessions.get(session_id)
+        if not session:
+            raise ValidationError(f"PFS session not found: {session_id}")
+        return session
+
+    def _ratchet_for_send(self, session: Dict[str, Any]) -> None:
+        next_priv = ec.generate_private_key(ec.SECP256R1())
+        next_priv_jwk = self._export_pfs_private_jwk(next_priv)
+        next_pub_jwk = self._export_pfs_public_jwk(next_priv.public_key())
+        dh = self._derive_ecdh_secret(next_priv_jwk, session["their_ratchet_public_jwk"])
+        mixed = self._derive_root_and_chains(session["root_key"], dh)
+        session["root_key"] = mixed["root_key"]
+        session["send_chain_key"] = mixed["chain_a"]
+        session["recv_chain_key"] = mixed["chain_b"]
+        session["prev_send_count"] = session["send_count"]
+        session["send_count"] = 0
+        session["my_ratchet_private_jwk"] = next_priv_jwk
+        session["my_ratchet_public_jwk"] = next_pub_jwk
+        session["updated_at"] = int(time.time() * 1000)
+
+    def _ratchet_for_receive(self, session: Dict[str, Any], their_ratchet_pub: Dict[str, Any]) -> None:
+        dh = self._derive_ecdh_secret(session["my_ratchet_private_jwk"], their_ratchet_pub)
+        mixed = self._derive_root_and_chains(session["root_key"], dh)
+        session["root_key"] = mixed["root_key"]
+        session["recv_chain_key"] = mixed["chain_a"]
+        session["send_chain_key"] = mixed["chain_b"]
+        session["recv_count"] = 0
+        session["their_ratchet_public_jwk"] = their_ratchet_pub
+        session["updated_at"] = int(time.time() * 1000)
+
     # ──────────────────────────────────────────────────────────────────────────
     # Authentication
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def register(self, email: str, password: str) -> AuthResponse:
+    async def register(
+        self,
+        email: str,
+        password: str,
+        *,
+        enable_recovery: bool = True,
+        recovery_phrase: Optional[str] = None,
+    ) -> AuthResponse:
         """
         Register a new user.
 
@@ -277,6 +458,17 @@ class Wolfronix:
         # 3. Wrap Private Key
         wrapped = wrap_private_key(key_pair.private_key, password)
 
+        recovery_words = (
+            recovery_phrase.strip().split() if recovery_phrase
+            else _generate_recovery_words(24) if enable_recovery
+            else []
+        )
+        recovery_phrase_text = " ".join(recovery_words)
+
+        recovery_wrapped = None
+        if enable_recovery and recovery_phrase_text:
+            recovery_wrapped = wrap_private_key(key_pair.private_key, recovery_phrase_text)
+
         # 4. Register with Server
         response = await self._request(
             "POST",
@@ -287,23 +479,30 @@ class Wolfronix:
                 "public_key_pem": public_key_pem,
                 "encrypted_private_key": wrapped.encrypted_key,
                 "salt": wrapped.salt,
+                "recovery_encrypted_private_key": recovery_wrapped.encrypted_key if recovery_wrapped else "",
+                "recovery_salt": recovery_wrapped.salt if recovery_wrapped else "",
             },
             include_auth=False,
         )
 
-        if response.get("success"):
+        if response.get("status") == "success" or response.get("success"):
             self._user_id = email
             self._public_key = key_pair.public_key
             self._private_key = key_pair.private_key
             self._public_key_pem = public_key_pem
             self._token = "zk-session"
 
-        return AuthResponse(
-            success=response.get("success", False),
+        result = AuthResponse(
+            success=response.get("status") == "success" or response.get("success", False),
             user_id=response.get("user_id", email),
             token=self._token or "",
             message=response.get("message", ""),
         )
+        # Keep parity with JS SDK: attach optional recovery metadata on result object.
+        if enable_recovery and recovery_phrase_text:
+            setattr(result, "recovery_phrase", recovery_phrase_text)
+            setattr(result, "recovery_words", recovery_words)
+        return result
 
     async def login(self, email: str, password: str) -> AuthResponse:
         """
@@ -355,6 +554,66 @@ class Wolfronix:
             user_id=email,
             token=self._token,
             message="Logged in successfully",
+        )
+
+    async def recover_account(self, email: str, recovery_phrase: str, new_password: str) -> AuthResponse:
+        """Recover private key using recovery phrase and set a new password."""
+        if not email or not recovery_phrase or not new_password:
+            raise ValidationError("email, recovery_phrase, and new_password are required")
+
+        response = await self._request(
+            "POST",
+            "/api/v1/keys/recover",
+            body={"client_id": self._config.client_id, "user_id": email},
+            include_auth=False,
+        )
+
+        if not response.get("recovery_encrypted_private_key") or not response.get("recovery_salt"):
+            raise AuthenticationError("Recovery material not found for this account")
+
+        recovered_private = unwrap_private_key(
+            response["recovery_encrypted_private_key"],
+            recovery_phrase,
+            response["recovery_salt"],
+        )
+        new_wrap = wrap_private_key(recovered_private, new_password)
+
+        await self._request(
+            "POST",
+            "/api/v1/keys/update-password",
+            body={
+                "client_id": self._config.client_id,
+                "user_id": email,
+                "encrypted_private_key": new_wrap.encrypted_key,
+                "salt": new_wrap.salt,
+            },
+            include_auth=False,
+        )
+
+        self._private_key = recovered_private
+        self._public_key_pem = response.get("public_key_pem", "")
+        self._public_key = import_key_from_pem(self._public_key_pem, "public")
+        self._user_id = email
+        self._token = "zk-session"
+
+        return AuthResponse(
+            success=True,
+            user_id=email,
+            token=self._token,
+            message="Account recovered successfully",
+        )
+
+    async def rotate_identity_keys(self, password: str, recovery_phrase: Optional[str] = None) -> Dict[str, Any]:
+        """Reserved for future server support. Currently not supported by server API."""
+        self._ensure_authenticated()
+        if not password:
+            raise ValidationError("password is required")
+        if recovery_phrase is not None and not recovery_phrase.strip():
+            raise ValidationError("recovery_phrase must be non-empty when provided")
+        raise WolfronixError(
+            "rotate_identity_keys is not supported by the current server API. Use recover_account() to re-wrap the existing private key with a new password.",
+            "NOT_SUPPORTED",
+            501,
         )
 
     def set_token(self, token: str, user_id: Optional[str] = None) -> None:
@@ -429,6 +688,84 @@ class Wolfronix:
             store_ms=response.get("store_ms"),
             total_ms=response.get("total_ms"),
         )
+
+    async def encrypt_resumable(
+        self,
+        file_data: Union[bytes, BinaryIO],
+        *,
+        filename: str = "file.bin",
+        chunk_size_bytes: int = 10 * 1024 * 1024,
+        existing_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Encrypt and upload file in chunks. Returns {"result": ..., "state": ...}.
+        Pass `existing_state` to resume partial uploads.
+        """
+        self._ensure_authenticated()
+        if chunk_size_bytes < 1024 * 1024:
+            raise ValidationError("chunk_size_bytes must be at least 1MB")
+
+        if isinstance(file_data, (bytes, bytearray)):
+            content = bytes(file_data)
+        else:
+            content = file_data.read()
+
+        total_chunks = (len(content) + chunk_size_bytes - 1) // chunk_size_bytes
+        base_upload_id = f"{int(time.time() * 1000)}-{os.urandom(4).hex()}"
+        state = existing_state or {
+            "upload_id": base_upload_id,
+            "filename": filename,
+            "file_size": len(content),
+            "chunk_size_bytes": chunk_size_bytes,
+            "total_chunks": total_chunks,
+            "uploaded_chunks": [],
+            "chunk_file_ids": [""] * total_chunks,
+            "created_at": int(time.time() * 1000),
+            "updated_at": int(time.time() * 1000),
+        }
+
+        if state["file_size"] != len(content) or state["total_chunks"] != total_chunks:
+            raise ValidationError("existing_state does not match current file/chunking settings")
+
+        uploaded = set(state["uploaded_chunks"])
+        for i in range(total_chunks):
+            if i in uploaded:
+                continue
+            start = i * chunk_size_bytes
+            end = min(start + chunk_size_bytes, len(content))
+            chunk_name = f"{filename}.part-{str(i + 1).zfill(6)}-of-{str(total_chunks).zfill(6)}"
+            enc = await self.encrypt(content[start:end], filename=chunk_name)
+            state["chunk_file_ids"][i] = enc.file_id
+            state["uploaded_chunks"].append(i)
+            state["updated_at"] = int(time.time() * 1000)
+
+        result = {
+            "upload_id": state["upload_id"],
+            "filename": state["filename"],
+            "total_chunks": state["total_chunks"],
+            "chunk_size_bytes": state["chunk_size_bytes"],
+            "uploaded_chunks": len(state["uploaded_chunks"]),
+            "chunk_file_ids": state["chunk_file_ids"],
+            "complete": len(state["uploaded_chunks"]) == state["total_chunks"],
+        }
+        return {"result": result, "state": state}
+
+    async def decrypt_chunked_to_buffer(self, manifest: Dict[str, Any], role: str = "owner") -> bytes:
+        """Decrypt and reassemble a chunked upload manifest into bytes."""
+        self._ensure_authenticated()
+        chunk_ids = manifest.get("chunk_file_ids") if manifest else None
+        if not chunk_ids:
+            raise ValidationError("manifest.chunk_file_ids is required")
+        chunks: List[bytes] = []
+        for file_id in chunk_ids:
+            if not file_id:
+                raise ValidationError("manifest contains empty chunk file ID")
+            chunks.append(await self.decrypt(str(file_id), role=role))
+        return b"".join(chunks)
+
+    async def decrypt_chunked_manifest(self, manifest: Dict[str, Any], role: str = "owner") -> bytes:
+        """Alias for decrypt_chunked_to_buffer for parity with JS naming."""
+        return await self.decrypt_chunked_to_buffer(manifest, role=role)
 
     async def decrypt(self, file_id: str, role: str = "owner") -> bytes:
         """
@@ -601,6 +938,169 @@ class Wolfronix:
     # ──────────────────────────────────────────────────────────────────────────
     # Server-Side Message Encryption (Dual-Key Split)
     # ──────────────────────────────────────────────────────────────────────────
+
+    async def create_pfs_prekey_bundle(self) -> Dict[str, Any]:
+        """Create a local PFS pre-key bundle to exchange with a peer."""
+        self._ensure_authenticated()
+        self._ensure_pfs_identity()
+        return {
+            "protocol": PFS_PROTOCOL,
+            "user_id": self._user_id,
+            "ratchet_pub_jwk": self._pfs_identity_public_jwk,
+            "created_at": int(time.time() * 1000),
+        }
+
+    async def init_pfs_session(
+        self, session_id: str, peer_bundle: Dict[str, Any], as_initiator: bool
+    ) -> Dict[str, Any]:
+        """Initialize local PFS state using peer bundle."""
+        self._ensure_authenticated()
+        if not session_id:
+            raise ValidationError("session_id is required")
+        if not peer_bundle or peer_bundle.get("protocol") != PFS_PROTOCOL or not peer_bundle.get("ratchet_pub_jwk"):
+            raise ValidationError("Invalid peer_bundle")
+
+        self._ensure_pfs_identity()
+        my_priv = self._pfs_identity_private_jwk
+        my_pub = self._pfs_identity_public_jwk
+        their_pub = peer_bundle["ratchet_pub_jwk"]
+        dh = self._derive_ecdh_secret(my_priv, their_pub)
+        mixed = self._derive_root_and_chains(_to_base64(ZERO_32), dh)
+        now = int(time.time() * 1000)
+        session = {
+            "protocol": PFS_PROTOCOL,
+            "session_id": session_id,
+            "role": "initiator" if as_initiator else "responder",
+            "root_key": mixed["root_key"],
+            "send_chain_key": mixed["chain_a"] if as_initiator else mixed["chain_b"],
+            "recv_chain_key": mixed["chain_b"] if as_initiator else mixed["chain_a"],
+            "send_count": 0,
+            "recv_count": 0,
+            "prev_send_count": 0,
+            "my_ratchet_private_jwk": my_priv,
+            "my_ratchet_public_jwk": my_pub,
+            "their_ratchet_public_jwk": their_pub,
+            "skipped_keys": {},
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._pfs_sessions[session_id] = session
+        return json.loads(json.dumps(session))
+
+    def export_pfs_session(self, session_id: str) -> Dict[str, Any]:
+        """Export PFS session state for persistence."""
+        return json.loads(json.dumps(self._get_pfs_session(session_id)))
+
+    def import_pfs_session(self, session: Dict[str, Any]) -> None:
+        """Import persisted PFS session state."""
+        if not session or session.get("protocol") != PFS_PROTOCOL or not session.get("session_id"):
+            raise ValidationError("Invalid PFS session payload")
+        self._pfs_sessions[session["session_id"]] = json.loads(json.dumps(session))
+
+    async def pfs_encrypt_message(self, session_id: str, plaintext: str) -> Dict[str, Any]:
+        """Encrypt a message with current PFS ratchet state."""
+        self._ensure_authenticated()
+        if not plaintext:
+            raise ValidationError("plaintext is required")
+        session = self._get_pfs_session(session_id)
+        self._ratchet_for_send(session)
+        n = session["send_count"]
+        msg_key = self._derive_message_key(session["send_chain_key"], n)
+        enc = self._encrypt_with_raw_key(msg_key, plaintext)
+        session["send_chain_key"] = self._derive_next_chain_key(session["send_chain_key"])
+        session["send_count"] += 1
+        session["updated_at"] = int(time.time() * 1000)
+        return {
+            "v": 1,
+            "type": "pfs_ratchet",
+            "session_id": session_id,
+            "n": n,
+            "pn": session["prev_send_count"],
+            "ratchet_pub_jwk": session["my_ratchet_public_jwk"],
+            "iv": enc["iv"],
+            "ciphertext": enc["ciphertext"],
+            "timestamp": int(time.time() * 1000),
+        }
+
+    async def pfs_decrypt_message(self, session_id: str, packet: Union[Dict[str, Any], str]) -> str:
+        """Decrypt a PFS packet and advance ratchet state."""
+        self._ensure_authenticated()
+        session = self._get_pfs_session(session_id)
+        msg = json.loads(packet) if isinstance(packet, str) else packet
+        if not msg or msg.get("type") != "pfs_ratchet" or msg.get("session_id") != session_id:
+            raise ValidationError("Invalid PFS message packet")
+
+        if _normalize_jwk(msg["ratchet_pub_jwk"]) != _normalize_jwk(session["their_ratchet_public_jwk"]):
+            self._ratchet_for_receive(session, msg["ratchet_pub_jwk"])
+
+        while session["recv_count"] < msg["n"]:
+            skipped_key = self._derive_message_key(session["recv_chain_key"], session["recv_count"])
+            session["skipped_keys"][_ratchet_key_id(session["their_ratchet_public_jwk"], session["recv_count"])] = _to_base64(skipped_key)
+            session["recv_chain_key"] = self._derive_next_chain_key(session["recv_chain_key"])
+            session["recv_count"] += 1
+
+        skip_id = _ratchet_key_id(session["their_ratchet_public_jwk"], msg["n"])
+        if skip_id in session["skipped_keys"]:
+            msg_key = _from_base64(session["skipped_keys"].pop(skip_id))
+        else:
+            msg_key = self._derive_message_key(session["recv_chain_key"], msg["n"])
+            session["recv_chain_key"] = self._derive_next_chain_key(session["recv_chain_key"])
+            session["recv_count"] = msg["n"] + 1
+
+        session["updated_at"] = int(time.time() * 1000)
+        return self._decrypt_with_raw_key(msg_key, msg["ciphertext"], msg["iv"])
+
+    async def encrypt_group_message(self, text: str, group_id: str, recipient_ids: List[str]) -> str:
+        """Encrypt one message for group recipients using sender-key fanout."""
+        self._ensure_authenticated()
+        if not text or not group_id:
+            raise ValidationError("text and group_id are required")
+        if not recipient_ids:
+            raise ValidationError("recipient_ids cannot be empty")
+
+        unique = sorted({rid for rid in recipient_ids if rid})
+        if self._user_id and self._user_id not in unique:
+            unique.append(self._user_id)
+
+        session_key = generate_session_key()
+        ciphertext, iv = encrypt_data(text, session_key)
+        raw_key = export_session_key(session_key)
+        recipient_keys: Dict[str, str] = {}
+        for rid in unique:
+            pem = await self.get_public_key(rid)
+            pub = import_key_from_pem(pem, "public")
+            recipient_keys[rid] = rsa_encrypt(raw_key, pub)
+
+        packet = {
+            "v": 1,
+            "type": "group_sender_key",
+            "sender_id": self._user_id or "",
+            "group_id": group_id,
+            "timestamp": int(time.time() * 1000),
+            "ciphertext": ciphertext,
+            "iv": iv,
+            "recipient_keys": recipient_keys,
+        }
+        return json.dumps(packet)
+
+    async def decrypt_group_message(self, packet_json: str) -> str:
+        """Decrypt a packet generated by encrypt_group_message."""
+        self._ensure_authenticated()
+        if not self._private_key or not self._user_id:
+            raise WolfronixError("Private key not available. Is user logged in?")
+        try:
+            packet = json.loads(packet_json)
+        except json.JSONDecodeError:
+            raise ValidationError("Invalid group packet format")
+
+        if packet.get("type") != "group_sender_key" or not packet.get("recipient_keys"):
+            raise ValidationError("Invalid group packet structure")
+        wrapped = packet["recipient_keys"].get(self._user_id)
+        if not wrapped:
+            raise PermissionDeniedError("You are not a recipient of this group message")
+        raw_session_key = rsa_decrypt(wrapped, self._private_key)
+        session_key = import_session_key(raw_session_key)
+        return decrypt_data(packet["ciphertext"], packet["iv"], session_key)
 
     async def server_encrypt(
         self, message: str, *, layer: int = 4

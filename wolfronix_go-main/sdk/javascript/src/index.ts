@@ -3,7 +3,7 @@
  * Zero-knowledge encryption made simple
  * 
  * @package @wolfronix/sdk
- * @version 2.4.3
+ * @version 2.4.9
  */
 
 import {
@@ -468,6 +468,18 @@ function fromBase64(b64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+function utf8ToBase64(input: string): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(input, 'utf8').toString('base64');
+  }
+  const bytes = new TextEncoder().encode(input);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 function concatBuffers(...buffers: ArrayBuffer[]): ArrayBuffer {
   const total = buffers.reduce((n, b) => n + b.byteLength, 0);
   const out = new Uint8Array(total);
@@ -727,11 +739,8 @@ export class Wolfronix {
           signal: controller.signal,
         };
 
-        // Support self-signed certs in Node.js (insecure mode)
-        // Sets NODE_TLS_REJECT_UNAUTHORIZED for the process lifetime
-        if (this.config.insecure && typeof process !== 'undefined' && process.env) {
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-        }
+        // NOTE: SDK does not mutate process.env at runtime.
+        // If self-signed TLS is required in Node.js, configure TLS externally.
 
         if (formData) {
           fetchOptions.body = formData;
@@ -739,8 +748,12 @@ export class Wolfronix {
           fetchOptions.body = JSON.stringify(body);
         }
 
-        const response = await fetch(url, fetchOptions);
-        if (timeoutId) clearTimeout(timeoutId);
+        let response: Response;
+        try {
+          response = await fetch(url, fetchOptions);
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
+        }
 
         // Handle errors
         if (!response.ok) {
@@ -1059,42 +1072,17 @@ export class Wolfronix {
    */
   async rotateIdentityKeys(password: string, recoveryPhrase?: string): Promise<{ success: boolean; message: string; recoveryPhrase?: string }> {
     this.ensureAuthenticated();
-    if (!this.userId) {
-      throw new AuthenticationError('No active user session');
-    }
     if (!password) {
       throw new ValidationError('password is required');
     }
-
-    const keyPair = await generateKeyPair();
-    const publicKeyPEM = await exportKeyToPEM(keyPair.publicKey, 'public');
-    const passwordWrap = await wrapPrivateKey(keyPair.privateKey, password);
-
-    const words = recoveryPhrase ? recoveryPhrase.trim().split(/\s+/).filter(Boolean) : generateRecoveryWords(24);
-    const phrase = words.join(' ');
-    const recoveryWrap = await wrapPrivateKey(keyPair.privateKey, phrase);
-
-    await this.request<any>('POST', '/api/v1/keys/register', {
-      body: {
-        client_id: this.config.clientId,
-        user_id: this.userId,
-        public_key_pem: publicKeyPEM,
-        encrypted_private_key: passwordWrap.encryptedKey,
-        salt: passwordWrap.salt,
-        recovery_encrypted_private_key: recoveryWrap.encryptedKey,
-        recovery_salt: recoveryWrap.salt
-      }
-    });
-
-    this.publicKey = keyPair.publicKey;
-    this.privateKey = keyPair.privateKey;
-    this.publicKeyPEM = publicKeyPEM;
-
-    return {
-      success: true,
-      message: 'Identity keys rotated successfully',
-      recoveryPhrase: phrase
-    };
+    if (recoveryPhrase !== undefined && !recoveryPhrase.trim()) {
+      throw new ValidationError('recoveryPhrase must be non-empty when provided');
+    }
+    throw new WolfronixError(
+      'rotateIdentityKeys is not supported by the current server API. Use recoverAccount() to re-wrap the existing private key with a new password.',
+      'NOT_SUPPORTED',
+      501
+    );
   }
 
   /**
@@ -1365,6 +1353,15 @@ export class Wolfronix {
       offset += part.byteLength;
     }
     return merged.buffer;
+  }
+
+  /**
+   * Decrypts and reassembles a chunked upload into a Blob.
+   * This is a browser-friendly alias over `decryptChunkedToBuffer`.
+   */
+  async decryptChunkedManifest(manifest: ChunkedDecryptManifest, role: string = 'owner'): Promise<Blob> {
+    const merged = await this.decryptChunkedToBuffer(manifest, role);
+    return new Blob([merged], { type: 'application/octet-stream' });
   }
 
   /**
@@ -2096,8 +2093,8 @@ export class WolfronixStream {
       throw new Error('Stream not connected');
     }
 
-    // If data is plain text, base64-encode it
-    const b64Data = this.isBase64(data) ? data : btoa(data);
+    // If data is plain text, base64-encode it as UTF-8.
+    const b64Data = this.isBase64(data) ? data : utf8ToBase64(data);
     const seq = this.seqCounter++;
 
     return new Promise<string>((resolve, reject) => {
@@ -2279,17 +2276,19 @@ export class WolfronixAdmin {
       signal: controller.signal
     };
 
-    // Support self-signed certs in Node.js (insecure mode)
-    if (this.insecure && typeof process !== 'undefined' && process.env) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-    }
+    // NOTE: SDK does not mutate process.env at runtime.
+    // If self-signed TLS is required in Node.js, configure TLS externally.
 
     if (body) {
       fetchOptions.body = JSON.stringify(body);
     }
 
-    const response = await fetch(url, fetchOptions);
-    clearTimeout(timeoutId);
+    let response: Response;
+    try {
+      response = await fetch(url, fetchOptions);
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({}));

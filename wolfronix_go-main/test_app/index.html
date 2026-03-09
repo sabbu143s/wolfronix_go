@@ -3,407 +3,180 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wolfronix Secure Vault</title>
-    <meta name="description" content="End-to-end encrypted vault for identity documents, payment cards, files, and secure chat — powered by Wolfronix SDK">
+    <title>Wolfronix App</title>
+    <meta name="description" content="Secure digital vault, encrypted chat, and personal profile powered by Wolfronix">
     <link rel="stylesheet" href="styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
-    <!-- ─── Header ─── -->
     <header id="app-header">
         <div class="header-brand">
-            <div class="logo">🛡️</div>
+            <div class="logo">W</div>
             <div>
-                <h1>Wolfronix <span class="accent">Secure Vault</span></h1>
-                <p class="tagline">Zero-knowledge encryption for your sensitive data</p>
+                <h1>Wolfronix <span class="accent">App</span></h1>
+                <p class="tagline">Digital vault, encrypted chat, and profile</p>
             </div>
         </div>
         <div class="header-right">
             <div id="status-badge" class="badge badge-disconnected">Disconnected</div>
-            <div id="user-badge" style="display:none" class="badge badge-user">
-                <span id="userBadgeName">—</span>
-                <button class="badge-logout" onclick="doLogout()" title="Logout">✕</button>
+            <div id="auth-user-badge" class="badge badge-user" style="display:none;">
+                <span id="auth-user-name">-</span>
+                <button class="badge-logout" onclick="logout()" title="Logout">x</button>
             </div>
         </div>
     </header>
 
-    <!-- ─── Config Bar ─── -->
-    <div id="config-bar">
-        <div class="config-inner">
-            <button id="connectBtn" onclick="initClient()">🔌 Connect to Server</button>
-        </div>
-    </div>
-
-    <!-- ─── Navigation ─── -->
-    <nav id="main-nav">
-        <button class="nav-btn active" data-tab="auth">🔐 Auth</button>
-        <button class="nav-btn" data-tab="identity">🪪 Identity</button>
-        <button class="nav-btn" data-tab="cards">💳 Cards</button>
-        <button class="nav-btn" data-tab="files">📁 Files</button>
-        <button class="nav-btn" data-tab="chat">💬 Chat</button>
-        <button class="nav-btn" data-tab="logs">📋 Logs</button>
-    </nav>
-
-    <!-- ═══════════════ AUTH TAB ═══════════════ -->
-    <section id="tab-auth" class="tab active">
-        <div class="tab-header">
-            <h2>🔐 Authentication</h2>
-            <p>Zero-knowledge key management — your private key never leaves your device</p>
-        </div>
-
-        <div class="auth-grid">
-            <div class="card glass">
-                <div class="card-icon">📝</div>
-                <h3>Register</h3>
-                <p class="desc">Generate RSA keys client-side, wrap with your password</p>
+    <main class="app-shell">
+        <section id="screen-login" class="auth-screen active">
+            <div class="card glass auth-card">
+                <h2>Login</h2>
+                <p class="desc">Sign in to your encrypted account</p>
                 <div class="form-col">
-                    <input type="email" id="regEmail" placeholder="Email address">
-                    <input type="password" id="regPassword" placeholder="Password">
-                    <button onclick="doRegister()" class="btn-primary btn-full">Create Account</button>
-                </div>
-            </div>
-
-            <div class="card glass">
-                <div class="card-icon">🔑</div>
-                <h3>Login</h3>
-                <p class="desc">Fetch encrypted keys, unwrap locally with your password</p>
-                <div class="form-col">
-                    <input type="email" id="loginEmail" placeholder="Email address">
+                    <input type="email" id="loginEmail" placeholder="Email">
                     <input type="password" id="loginPassword" placeholder="Password">
-                    <button onclick="doLogin()" class="btn-primary btn-full">Sign In</button>
+                    <button class="btn-primary btn-full" onclick="login()">Login</button>
                 </div>
+                <p class="auth-switch">No account? <a href="#" onclick="showRegister(); return false;">Create one</a></p>
             </div>
-        </div>
+        </section>
 
-        <div class="card glass" id="user-info" style="display:none;">
-            <div class="user-info-row">
-                <div>
-                    <div class="user-avatar" id="userAvatar">U</div>
+        <section id="screen-register" class="auth-screen">
+            <div class="card glass auth-card">
+                <h2>Register</h2>
+                <p class="desc">Create account and generate your encryption keys</p>
+                <div class="form-col">
+                    <input type="email" id="registerEmail" placeholder="Email">
+                    <input type="password" id="registerPassword" placeholder="Password">
+                    <button class="btn-primary btn-full" onclick="register()">Create Account</button>
                 </div>
-                <div class="user-details">
-                    <h3 id="currentUser">—</h3>
-                    <p id="keyStatus" class="desc">—</p>
-                </div>
-                <button class="btn-danger" onclick="doLogout()">Logout</button>
+                <label class="field-label">Recovery phrase (save offline)</label>
+                <textarea id="registerRecoveryPhrase" rows="3" readonly placeholder="Your recovery phrase appears here after registration"></textarea>
+                <p class="auth-switch">Already have an account? <a href="#" onclick="showLogin(); return false;">Login</a></p>
             </div>
-        </div>
-    </section>
+        </section>
 
-    <!-- ═══════════════ IDENTITY VAULT TAB ═══════════════ -->
-    <section id="tab-identity" class="tab">
-        <div class="tab-header">
-            <h2>🪪 Identity Vault</h2>
-            <p>Store Aadhaar, PAN and identity documents with military-grade encryption</p>
-        </div>
+        <section id="screen-home" class="home-screen">
+            <nav class="home-nav">
+                <button id="homeTabVault" class="nav-btn active" onclick="switchHomeTab('vault')">Digital Vault</button>
+                <button id="homeTabChat" class="nav-btn" onclick="switchHomeTab('chat')">Chat</button>
+                <button id="homeTabProfile" class="nav-btn" onclick="switchHomeTab('profile')">Profile</button>
+            </nav>
 
-        <!-- Aadhaar Card Form -->
-        <div class="card glass">
-            <div class="card-header-row">
-                <h3>🇮🇳 Aadhaar Card</h3>
-                <span class="encrypted-badge">🔒 AES-256-GCM</span>
-            </div>
-            <div class="identity-form">
-                <div class="form-grid-2">
-                    <div class="form-group">
-                        <label>Aadhaar Number</label>
-                        <input type="text" id="aadhaarNumber" placeholder="XXXX XXXX XXXX" maxlength="14"
-                               oninput="formatAadhaar(this)">
-                    </div>
-                    <div class="form-group">
-                        <label>Full Name</label>
-                        <input type="text" id="aadhaarName" placeholder="As printed on card">
-                    </div>
-                    <div class="form-group">
-                        <label>Date of Birth</label>
-                        <input type="date" id="aadhaarDob">
-                    </div>
-                    <div class="form-group">
-                        <label>Gender</label>
-                        <select id="aadhaarGender">
-                            <option value="">Select</option>
-                            <option value="Male">Male</option>
-                            <option value="Female">Female</option>
-                            <option value="Other">Other</option>
-                        </select>
+            <section id="home-vault" class="home-section active">
+                <div class="card glass">
+                    <h3>Upload File</h3>
+                    <p class="desc">Files are encrypted client-side before upload. Large files use resumable chunk upload automatically.</p>
+                    <div class="form-col">
+                        <input type="file" id="vaultFileInput" onchange="onVaultFileSelected(this)">
+                        <div id="vaultSelectedFileName" class="upload-sub">No file selected</div>
+                        <button id="vaultUploadBtn" class="btn-primary" onclick="uploadVaultFile()" disabled>Encrypt and Upload</button>
+                        <div id="vaultUploadStatus" class="desc"></div>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Address</label>
-                    <textarea id="aadhaarAddress" rows="2" placeholder="Full address as on Aadhaar"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Upload Aadhaar Scan (optional)</label>
-                    <input type="file" id="aadhaarFile" accept="image/*,.pdf">
-                </div>
-                <button onclick="saveAadhaar()" class="btn-primary">🔒 Encrypt & Save Aadhaar</button>
-            </div>
-        </div>
-
-        <!-- PAN Card Form -->
-        <div class="card glass">
-            <div class="card-header-row">
-                <h3>🏛️ PAN Card</h3>
-                <span class="encrypted-badge">🔒 AES-256-GCM</span>
-            </div>
-            <div class="identity-form">
-                <div class="form-grid-2">
-                    <div class="form-group">
-                        <label>PAN Number</label>
-                        <input type="text" id="panNumber" placeholder="ABCDE1234F" maxlength="10"
-                               oninput="this.value = this.value.toUpperCase()">
+                <div class="card glass">
+                    <div class="card-header-row">
+                        <h3>My Files</h3>
+                        <button class="btn-sm" onclick="loadVaultFiles()">Refresh</button>
                     </div>
-                    <div class="form-group">
-                        <label>Full Name</label>
-                        <input type="text" id="panName" placeholder="As printed on card">
-                    </div>
-                    <div class="form-group">
-                        <label>Date of Birth</label>
-                        <input type="date" id="panDob">
-                    </div>
-                    <div class="form-group">
-                        <label>Father's Name</label>
-                        <input type="text" id="panFather" placeholder="Father's name">
+                    <div id="vaultFileList" class="vault-list">
+                        <p class="placeholder">No files yet.</p>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>Upload PAN Scan (optional)</label>
-                    <input type="file" id="panFile" accept="image/*,.pdf">
-                </div>
-                <button onclick="savePAN()" class="btn-primary">🔒 Encrypt & Save PAN</button>
-            </div>
-        </div>
-
-        <!-- Stored Identity Documents -->
-        <div class="card glass">
-            <div class="card-header-row">
-                <h3>📋 Stored Documents</h3>
-                <button onclick="loadIdentityDocs()" class="btn-sm">Refresh</button>
-            </div>
-            <div id="identityDocsList" class="vault-list">
-                <p class="placeholder">Click Refresh to load your encrypted documents</p>
-            </div>
-        </div>
-    </section>
-
-    <!-- ═══════════════ CARD VAULT TAB ═══════════════ -->
-    <section id="tab-cards" class="tab">
-        <div class="tab-header">
-            <h2>💳 Card Vault</h2>
-            <p>Securely store credit & debit card details with zero-knowledge encryption</p>
-        </div>
-
-        <!-- Add Card Form -->
-        <div class="card glass">
-            <div class="card-header-row">
-                <h3>Add New Card</h3>
-                <span class="encrypted-badge">🔒 Dual-Key Split</span>
-            </div>
-
-            <!-- Credit Card Visual -->
-            <div class="credit-card-preview">
-                <div class="cc-chip"></div>
-                <div class="cc-number" id="ccPreviewNumber">•••• •••• •••• ••••</div>
-                <div class="cc-bottom">
-                    <div>
-                        <div class="cc-label">CARDHOLDER</div>
-                        <div class="cc-name" id="ccPreviewName">YOUR NAME</div>
+                <div id="vaultPreviewCard" class="card glass" style="display:none;">
+                    <div class="preview-header">
+                        <h3 id="vaultPreviewTitle">Decrypted File</h3>
+                        <div class="preview-actions">
+                            <button class="btn-sm" onclick="downloadVaultPreview()">Download</button>
+                            <button class="btn-close" onclick="closeVaultPreview()">x</button>
+                        </div>
                     </div>
-                    <div>
-                        <div class="cc-label">EXPIRES</div>
-                        <div class="cc-expiry" id="ccPreviewExpiry">MM/YY</div>
-                    </div>
+                    <div id="vaultPreviewContent" class="preview-content"></div>
                 </div>
-            </div>
+            </section>
 
-            <div class="identity-form">
-                <div class="form-grid-2">
-                    <div class="form-group">
-                        <label>Card Number</label>
-                        <input type="text" id="cardNumber" placeholder="1234 5678 9012 3456" maxlength="19"
-                               oninput="formatCardNumber(this)">
+            <section id="home-chat" class="home-section">
+                <div class="chat-layout">
+                    <div class="chat-sidebar">
+                        <div class="chat-sidebar-header">
+                            <h4>Conversations</h4>
+                        </div>
+                        <div class="form-group" style="padding: 12px;">
+                            <input type="text" id="chatRecipientInput" placeholder="Recipient user ID / email" onkeydown="if(event.key==='Enter') openChat()">
+                            <button class="btn-primary btn-full" style="margin-top:8px;" onclick="openChat()">Open Chat</button>
+                        </div>
+                        <div class="form-group" style="padding: 0 12px 12px 12px;">
+                            <input type="text" id="groupChatId" placeholder="Group ID (e.g. team-alpha)">
+                            <textarea id="groupChatMembers" rows="2" placeholder="Members (comma/newline user IDs)"></textarea>
+                            <button class="btn-sm btn-full" style="margin-top:8px;" onclick="openGroupChat()">Open Group Chat</button>
+                        </div>
+                        <div id="chatContacts" class="chat-contacts">
+                            <p class="placeholder" style="padding:12px; font-size:12px;">No conversations yet</p>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>Cardholder Name</label>
-                        <input type="text" id="cardName" placeholder="Name on card"
-                               oninput="updateCardPreview()">
-                    </div>
-                    <div class="form-group">
-                        <label>Expiry Date</label>
-                        <input type="text" id="cardExpiry" placeholder="MM/YY" maxlength="5"
-                               oninput="formatExpiry(this)">
-                    </div>
-                    <div class="form-group">
-                        <label>CVV</label>
-                        <input type="password" id="cardCvv" placeholder="•••" maxlength="4">
-                    </div>
-                </div>
-                <div class="form-grid-2">
-                    <div class="form-group">
-                        <label>Card Type</label>
-                        <select id="cardType">
-                            <option value="credit">Credit Card</option>
-                            <option value="debit">Debit Card</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Bank / Issuer</label>
-                        <input type="text" id="cardBank" placeholder="e.g., HDFC, SBI, ICICI">
-                    </div>
-                </div>
-                <button onclick="saveCard()" class="btn-primary">🔒 Encrypt & Save Card</button>
-            </div>
-        </div>
-
-        <!-- Stored Cards -->
-        <div class="card glass">
-            <div class="card-header-row">
-                <h3>💳 Saved Cards</h3>
-                <button onclick="loadCards()" class="btn-sm">Refresh</button>
-            </div>
-            <div id="cardsList" class="vault-list">
-                <p class="placeholder">Click Refresh to load your encrypted cards</p>
-            </div>
-        </div>
-    </section>
-
-    <!-- ═══════════════ FILE VAULT TAB ═══════════════ -->
-    <section id="tab-files" class="tab">
-        <div class="tab-header">
-            <h2>📁 File Vault</h2>
-            <p>Upload any file — encrypted with 4-layer security before storage</p>
-        </div>
-
-        <div class="card glass">
-            <h3>Encrypt & Upload</h3>
-            <p class="desc">AES-256-GCM → Dual-Key Split → RSA Wrap → Stored on your database</p>
-            <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()"
-                 ondragover="event.preventDefault(); this.classList.add('dragover')"
-                 ondragleave="this.classList.remove('dragover')"
-                 ondrop="handleDrop(event)">
-                <div class="upload-icon">📤</div>
-                <div class="upload-text">Click or drag files here to encrypt</div>
-                <div class="upload-sub" id="selectedFileName">Max recommended: 500 MB</div>
-                <input type="file" id="fileInput" style="display:none" onchange="onFileSelected(this)">
-            </div>
-            <button onclick="doEncrypt()" class="btn-primary btn-full" id="encryptBtn" disabled>🔒 Encrypt & Upload</button>
-            <div id="encryptResult" class="result-box" style="display:none;"></div>
-        </div>
-
-        <div class="card glass">
-            <div class="card-header-row">
-                <h3>🗂️ My Encrypted Files</h3>
-                <button onclick="doListFiles()" class="btn-sm">Refresh</button>
-            </div>
-            <div id="fileList" class="vault-list">
-                <p class="placeholder">Click Refresh to load files</p>
-            </div>
-        </div>
-
-        <div class="card glass">
-            <h3>Decrypt by ID</h3>
-            <p class="desc">Zero-knowledge: RSA-encrypted key → client-side decrypt → view file</p>
-            <div class="form-row">
-                <input type="text" id="decryptFileId" placeholder="Enter File ID">
-                <button onclick="doDecrypt()" class="btn-primary">Decrypt & View</button>
-            </div>
-        </div>
-
-        <!-- File Preview Panel -->
-        <div class="card glass" id="previewCard" style="display:none;">
-            <div class="preview-header">
-                <h3 id="previewTitle">Decrypted File</h3>
-                <div class="preview-actions">
-                    <button onclick="downloadPreview()" class="btn-sm">⬇ Download</button>
-                    <button class="btn-close" onclick="closePreview()">✕</button>
-                </div>
-            </div>
-            <div id="previewContent" class="preview-content"></div>
-        </div>
-    </section>
-
-    <!-- ═══════════════ SECURE CHAT TAB ═══════════════ -->
-    <section id="tab-chat" class="tab">
-        <div class="tab-header">
-            <h2>💬 Secure Chat</h2>
-            <p>End-to-end encrypted messaging — only you and the recipient can read</p>
-        </div>
-
-        <div class="chat-layout">
-            <!-- Chat Sidebar -->
-            <div class="chat-sidebar">
-                <div class="chat-sidebar-header">
-                    <h4>Start Conversation</h4>
-                </div>
-                <div class="form-group" style="padding: 12px;">
-                    <input type="text" id="chatRecipientId" placeholder="Recipient email / user ID">
-                    <button onclick="startChat()" class="btn-primary btn-full" style="margin-top:8px;">🔐 Open Chat</button>
-                </div>
-                <div class="chat-contacts" id="chatContacts">
-                    <p class="placeholder" style="padding:12px; font-size:12px;">No conversations yet</p>
-                </div>
-            </div>
-
-            <!-- Chat Main Area -->
-            <div class="chat-main">
-                <div class="chat-header" id="chatHeader">
-                    <div class="chat-header-info">
-                        <div class="chat-avatar" id="chatAvatar">?</div>
-                        <div>
-                            <div class="chat-recipient-name" id="chatRecipientName">Select a conversation</div>
-                            <div class="chat-e2e-badge">🔐 E2E Encrypted · RSA-2048 + AES-256</div>
+                    <div class="chat-main">
+                        <div class="chat-header">
+                            <div class="chat-header-info">
+                                <div class="chat-avatar" id="chatAvatar">?</div>
+                                <div>
+                                    <div id="chatHeaderName" class="chat-recipient-name">Select a conversation</div>
+                                    <div class="chat-e2e-badge">End-to-end encrypted</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="chatMessages" class="chat-messages">
+                            <div class="chat-empty">
+                                <div class="chat-empty-icon">Chat</div>
+                                <div class="chat-empty-text">Open a conversation to start messaging.</div>
+                            </div>
+                        </div>
+                        <div class="chat-input-bar">
+                            <input type="text" id="chatMessageInput" placeholder="Type a message" onkeydown="if(event.key==='Enter') sendChatMessage()">
+                            <button class="btn-send" onclick="sendChatMessage()">Send</button>
                         </div>
                     </div>
                 </div>
+            </section>
 
-                <div class="chat-messages" id="chatMessages">
-                    <div class="chat-empty">
-                        <div class="chat-empty-icon">🔒</div>
-                        <div class="chat-empty-text">Messages are end-to-end encrypted.<br>Enter a user ID to start chatting.</div>
+            <section id="home-profile" class="home-section">
+                <div class="card glass">
+                    <h3>Personal Data</h3>
+                    <p class="desc">Stored as encrypted profile file in your vault.</p>
+                    <div class="identity-form">
+                        <div class="form-grid-2">
+                            <div class="form-group">
+                                <label>Full Name</label>
+                                <input type="text" id="profileFullName" placeholder="Full name">
+                            </div>
+                            <div class="form-group">
+                                <label>Phone</label>
+                                <input type="text" id="profilePhone" placeholder="+91...">
+                            </div>
+                            <div class="form-group">
+                                <label>Date of Birth</label>
+                                <input type="date" id="profileDob">
+                            </div>
+                            <div class="form-group">
+                                <label>City</label>
+                                <input type="text" id="profileCity" placeholder="City">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Address</label>
+                            <textarea id="profileAddress" rows="3" placeholder="Address"></textarea>
+                        </div>
+                        <div class="form-row">
+                            <button class="btn-primary" onclick="saveProfile()">Save Profile</button>
+                            <button class="btn-sm" onclick="loadProfile()">Reload</button>
+                            <button class="btn-danger" onclick="repairProfile()">Repair Profile</button>
+                        </div>
+                        <div id="profileMeta" class="desc" style="margin-top:10px;"></div>
                     </div>
                 </div>
+            </section>
+        </section>
+    </main>
 
-                <div class="chat-input-bar" id="chatInputBar" style="display:none;">
-                    <button onclick="document.getElementById('chatMediaInput').click()" class="btn-attach" title="Send media (image, video, document)">
-                        📎
-                    </button>
-                    <input type="file" id="chatMediaInput" style="display:none" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt" onchange="sendChatMedia(this)">
-                    <input type="text" id="chatMessageInput" placeholder="Type a message..."
-                           onkeydown="if(event.key==='Enter') sendChatMessage()">
-                    <button onclick="sendChatMessage()" class="btn-send">
-                        <span>Send �</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- ═══════════════ LOGS TAB ═══════════════ -->
-    <section id="tab-logs" class="tab">
-        <div class="tab-header">
-            <h2>📋 API Request Log</h2>
-            <p>Monitor all SDK requests in real-time</p>
-        </div>
-        <div class="card glass">
-            <div class="card-header-row">
-                <h3>Request Log</h3>
-                <button onclick="clearLogs()" class="btn-sm btn-danger">Clear</button>
-            </div>
-            <div id="logContainer" class="log-container"></div>
-        </div>
-    </section>
-
-    <!-- ─── Document Viewer Modal ─── -->
-    <div id="docViewerModal" class="modal" style="display:none;" onclick="if(event.target===this) closeDocViewer()">
-        <div class="modal-content glass">
-            <div class="modal-header">
-                <h3 id="docViewerTitle">Document Details</h3>
-                <button class="btn-close" onclick="closeDocViewer()">✕</button>
-            </div>
-            <div id="docViewerBody" class="modal-body"></div>
-        </div>
-    </div>
-
-    <script src="wolfronix.browser.js"></script>
-    <script src="app.js"></script>
+    <script src="wolfronix.browser.js?v=20260305-1"></script>
+    <script src="app.js?v=20260305-13"></script>
 </body>
 </html>

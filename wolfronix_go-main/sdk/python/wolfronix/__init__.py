@@ -3,7 +3,7 @@ Wolfronix SDK for Python
 Zero-knowledge encryption made simple
 
 @package wolfronix-sdk
-@version 1.0.0
+@version 1.1.0
 """
 
 from .client import Wolfronix, create_client
@@ -35,13 +35,21 @@ from .types import (
     WolfronixConfig,
     WolfronixAdminConfig,
     AuthResponse,
+    RecoverySetup,
     EncryptResponse,
+    ChunkedEncryptResult,
+    ResumableUploadState,
+    ChunkedDecryptManifest,
     FileInfo,
     ListFilesResponse,
     DeleteResponse,
     KeyPartResponse,
     MetricsResponse,
     EncryptMessagePacket,
+    GroupEncryptPacket,
+    PfsPreKeyBundle,
+    PfsMessagePacket,
+    PfsSessionState,
     ServerEncryptResult,
     ServerDecryptParams,
     ServerBatchEncryptResult,
@@ -56,7 +64,7 @@ from .types import (
     DBType,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __all__ = [
     # Main clients
     "Wolfronix",
@@ -87,13 +95,21 @@ __all__ = [
     "WolfronixConfig",
     "WolfronixAdminConfig",
     "AuthResponse",
+    "RecoverySetup",
     "EncryptResponse",
+    "ChunkedEncryptResult",
+    "ResumableUploadState",
+    "ChunkedDecryptManifest",
     "FileInfo",
     "ListFilesResponse",
     "DeleteResponse",
     "KeyPartResponse",
     "MetricsResponse",
     "EncryptMessagePacket",
+    "GroupEncryptPacket",
+    "PfsPreKeyBundle",
+    "PfsMessagePacket",
+    "PfsSessionState",
     "ServerEncryptResult",
     "ServerDecryptParams",
     "ServerBatchEncryptResult",

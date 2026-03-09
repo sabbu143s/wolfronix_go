@@ -11,7 +11,7 @@ from httpx import Response
 
 from wolfronix.client import Wolfronix
 from wolfronix.crypto import export_key_to_pem, generate_key_pair, wrap_private_key
-from wolfronix.errors import AuthenticationError, ValidationError
+from wolfronix.errors import AuthenticationError, ValidationError, WolfronixError
 from wolfronix.types import ServerDecryptParams, WolfronixConfig
 
 
@@ -112,6 +112,37 @@ class TestAuthentication:
         assert wfx.is_authenticated()
         assert wfx.get_user_id() == "user@test.com"
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_recover_account_success(self, wfx):
+        kp = generate_key_pair()
+        pub_pem = export_key_to_pem(kp.public_key, "public")
+        recovery_wrap = wrap_private_key(kp.private_key, "alpha beta gamma")
+        new_wrap = wrap_private_key(kp.private_key, "new_password")
+
+        respx.post("https://wolfronix.test/api/v1/keys/recover").mock(
+            return_value=Response(200, json={
+                "recovery_encrypted_private_key": recovery_wrap.encrypted_key,
+                "recovery_salt": recovery_wrap.salt,
+                "public_key_pem": pub_pem,
+            })
+        )
+        respx.post("https://wolfronix.test/api/v1/keys/update-password").mock(
+            return_value=Response(200, json={"status": "success"})
+        )
+
+        result = await wfx.recover_account("user@test.com", "alpha beta gamma", "new_password")
+        assert result.success is True
+        assert wfx.is_authenticated()
+        assert wfx.has_private_key()
+
+    @pytest.mark.asyncio
+    async def test_rotate_identity_keys_not_supported(self, wfx):
+        wfx.set_token("token", "user@test.com")
+        with pytest.raises(WolfronixError) as exc:
+            await wfx.rotate_identity_keys("password123")
+        assert exc.value.code == "NOT_SUPPORTED"
+
 
 class TestHealthCheck:
     @respx.mock
@@ -165,6 +196,12 @@ class TestFileOperations:
         wfx.set_token("token", "user@test.com")
         with pytest.raises(ValidationError):
             await wfx.delete_file("")
+
+    @pytest.mark.asyncio
+    async def test_encrypt_resumable_invalid_chunk_size(self, wfx):
+        wfx.set_token("token", "user@test.com")
+        with pytest.raises(ValidationError):
+            await wfx.encrypt_resumable(b"hello", chunk_size_bytes=1024)
 
 
 class TestServerEncryption:

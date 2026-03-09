@@ -62,6 +62,14 @@ class AuthResponse:
 
 
 @dataclass
+class RecoverySetup:
+    """Recovery phrase metadata returned by registration."""
+
+    recovery_phrase: str
+    recovery_words: List[str]
+
+
+@dataclass
 class EncryptResponse:
     """Response from file encryption."""
 
@@ -75,6 +83,36 @@ class EncryptResponse:
     store_ms: Optional[int] = None
     total_ms: Optional[int] = None
     extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ChunkedEncryptResult:
+    upload_id: str
+    filename: str
+    total_chunks: int
+    chunk_size_bytes: int
+    uploaded_chunks: int
+    chunk_file_ids: List[str]
+    complete: bool
+
+
+@dataclass
+class ResumableUploadState:
+    upload_id: str
+    filename: str
+    file_size: int
+    chunk_size_bytes: int
+    total_chunks: int
+    uploaded_chunks: List[int]
+    chunk_file_ids: List[str]
+    created_at: int
+    updated_at: int
+
+
+@dataclass
+class ChunkedDecryptManifest:
+    filename: str
+    chunk_file_ids: List[str]
 
 
 @dataclass
@@ -131,6 +169,58 @@ class EncryptMessagePacket:
     key: str  # Encrypted AES session key (RSA encrypted)
     iv: str   # AES-GCM IV
     msg: str  # Encrypted message text (AES encrypted)
+
+
+@dataclass
+class GroupEncryptPacket:
+    v: int
+    type: str
+    sender_id: str
+    group_id: str
+    timestamp: int
+    ciphertext: str
+    iv: str
+    recipient_keys: Dict[str, str]
+
+
+@dataclass
+class PfsPreKeyBundle:
+    protocol: str
+    user_id: Optional[str]
+    ratchet_pub_jwk: Dict[str, Any]
+    created_at: int
+
+
+@dataclass
+class PfsMessagePacket:
+    v: int
+    type: str
+    session_id: str
+    n: int
+    pn: int
+    ratchet_pub_jwk: Dict[str, Any]
+    iv: str
+    ciphertext: str
+    timestamp: int
+
+
+@dataclass
+class PfsSessionState:
+    protocol: str
+    session_id: str
+    role: str
+    root_key: str
+    send_chain_key: str
+    recv_chain_key: str
+    send_count: int
+    recv_count: int
+    prev_send_count: int
+    my_ratchet_private_jwk: Dict[str, Any]
+    my_ratchet_public_jwk: Dict[str, Any]
+    their_ratchet_public_jwk: Dict[str, Any]
+    skipped_keys: Dict[str, str]
+    created_at: int
+    updated_at: int
 
 
 @dataclass

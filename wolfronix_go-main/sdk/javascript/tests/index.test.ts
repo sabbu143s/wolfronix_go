@@ -100,6 +100,10 @@ describe('Wolfronix SDK', () => {
     it('should throw AuthenticationError for deleteFile when not logged in', async () => {
       await expect(client.deleteFile('file-id')).rejects.toThrow(AuthenticationError);
     });
+
+    it('should throw AuthenticationError for decryptChunkedManifest when not logged in', async () => {
+      await expect(client.decryptChunkedManifest({ filename: 'x.bin', chunk_file_ids: ['1'] })).rejects.toThrow(AuthenticationError);
+    });
   });
 
   describe('Validation', () => {
@@ -117,6 +121,10 @@ describe('Wolfronix SDK', () => {
 
     it('should throw ValidationError for empty file ID in delete', async () => {
       await expect(client.deleteFile('')).rejects.toThrow(ValidationError);
+    });
+
+    it('should throw WolfronixError for rotateIdentityKeys (not supported)', async () => {
+      await expect(client.rotateIdentityKeys('password123')).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
     });
   });
 
