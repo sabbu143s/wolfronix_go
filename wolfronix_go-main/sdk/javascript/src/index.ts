@@ -18,6 +18,7 @@ import {
   rsaEncrypt,
   rsaDecrypt,
   rsaDecryptBase64,
+  signChallenge,
   exportSessionKey,
   importSessionKey
 } from './crypto';
@@ -46,6 +47,13 @@ export interface AuthResponse {
   user_id: string;
   token: string;
   message: string;
+  token_type?: string;
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  refresh_expires_in?: number;
+  access_expires_at?: string;
+  refresh_expires_at?: string;
 }
 
 export interface RecoverySetup {
@@ -623,8 +631,10 @@ async function decryptWithRawKey(rawKey: ArrayBuffer, ciphertextB64: string, ivB
 export class Wolfronix {
   private readonly config: Required<WolfronixConfig>;
   private token: string | null = null;
+  private refreshToken: string | null = null;
   private userId: string | null = null;
   private tokenExpiry: Date | null = null;
+  private refreshTokenExpiry: Date | null = null;
 
   // Client-side keys (never stored on server in raw form)
   private publicKey: CryptoKey | null = null;
@@ -704,6 +714,78 @@ export class Wolfronix {
     return headers;
   }
 
+  private applyAuthTokens(response: any, fallbackUserId?: string): void {
+    const accessToken = response?.access_token || response?.token || null;
+    const refreshToken = response?.refresh_token || null;
+    if (accessToken) {
+      this.token = String(accessToken);
+    } else if (!this.token) {
+      // Backward compatibility with older servers that returned no token fields.
+      this.token = 'zk-session';
+    }
+    if (refreshToken) {
+      this.refreshToken = String(refreshToken);
+    }
+    const expiresIn = Number(response?.expires_in || 0);
+    if (Number.isFinite(expiresIn) && expiresIn > 0) {
+      this.tokenExpiry = new Date(Date.now() + expiresIn * 1000);
+    } else if (this.token) {
+      this.tokenExpiry = new Date(Date.now() + 15 * 60 * 1000);
+    }
+    const refreshExpiresIn = Number(response?.refresh_expires_in || 0);
+    if (Number.isFinite(refreshExpiresIn) && refreshExpiresIn > 0) {
+      this.refreshTokenExpiry = new Date(Date.now() + refreshExpiresIn * 1000);
+    }
+    if (fallbackUserId) {
+      this.userId = fallbackUserId;
+    } else if (response?.user_id) {
+      this.userId = String(response.user_id);
+    }
+  }
+
+  private async tryRefreshAuthSession(): Promise<boolean> {
+    if (!this.refreshToken) {
+      return false;
+    }
+    if (this.refreshTokenExpiry && this.refreshTokenExpiry <= new Date()) {
+      this.logout();
+      return false;
+    }
+    const url = `${this.config.baseUrl}/api/v1/auth/refresh`;
+    const headers = this.getHeaders(false);
+    headers['Content-Type'] = 'application/json';
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ refresh_token: this.refreshToken }),
+    });
+    if (!response.ok) {
+      this.logout();
+      return false;
+    }
+    const payload = await response.json();
+    this.applyAuthTokens(payload, this.userId || undefined);
+    return !!this.token;
+  }
+
+  private async completeAuthChallenge(userId: string, challengeId: string, payload: string): Promise<void> {
+    if (!this.privateKey) {
+      throw new AuthenticationError('Private key not available for auth proof');
+    }
+    const signature = await signChallenge(this.privateKey, payload);
+    const response = await this.request<any>('POST', '/api/v1/auth/complete-login', {
+      body: {
+        client_id: this.config.clientId,
+        user_id: userId,
+        challenge_id: challengeId,
+        signature,
+      },
+      includeAuth: false,
+    });
+    this.applyAuthTokens(response, userId);
+  }
+
   private async request<T>(
     method: string,
     endpoint: string,
@@ -717,16 +799,15 @@ export class Wolfronix {
   ): Promise<T> {
     const { body, formData, includeAuth = true, responseType = 'json', headers: extraHeaders } = options;
     const url = `${this.config.baseUrl}${endpoint}`;
-    const headers = { ...this.getHeaders(includeAuth), ...extraHeaders };
-
-    if (body && !formData) {
-      headers['Content-Type'] = 'application/json';
-    }
 
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.config.retries; attempt++) {
       try {
+        const headers = { ...this.getHeaders(includeAuth), ...extraHeaders };
+        if (body && !formData) {
+          headers['Content-Type'] = 'application/json';
+        }
         const controller = new AbortController();
         // Skip timeout for file uploads (FormData) — large files can take hours
         const timeoutId = formData
@@ -760,6 +841,10 @@ export class Wolfronix {
           const errorBody = await response.json().catch(() => ({}));
 
           if (response.status === 401) {
+            const canRefresh = includeAuth && endpoint !== '/api/v1/auth/refresh';
+            if (canRefresh && await this.tryRefreshAuthSession()) {
+              continue;
+            }
             throw new AuthenticationError(errorBody.error || 'Authentication failed');
           }
           if (response.status === 403) {
@@ -939,15 +1024,26 @@ export class Wolfronix {
       this.publicKey = keyPair.publicKey;
       this.privateKey = keyPair.privateKey;
       this.publicKeyPEM = publicKeyPEM;
-      this.token = 'zk-session'; // Local session marker (auth via X-Wolfronix-Key header)
+      if (response.auth_challenge_id && response.auth_challenge_payload) {
+        await this.completeAuthChallenge(email, response.auth_challenge_id, response.auth_challenge_payload);
+      } else {
+        this.applyAuthTokens(response, email);
+      }
     }
 
     const out: AuthResponse & Partial<RecoverySetup> = {
       success: response.status === 'success' || response.success === true,
       user_id: response.user_id || email,
-      token: this.token || 'zk-session',
+      token: this.token || '',
       message: response.message || 'Keys registered successfully'
     };
+    out.token_type = response.token_type;
+    out.access_token = response.access_token || this.token || undefined;
+    out.refresh_token = response.refresh_token || this.refreshToken || undefined;
+    out.expires_in = response.expires_in;
+    out.refresh_expires_in = response.refresh_expires_in;
+    out.access_expires_at = response.access_expires_at;
+    out.refresh_expires_at = response.refresh_expires_at;
     if (enableRecovery && recoveryPhrase) {
       out.recoveryPhrase = recoveryPhrase;
       out.recoveryWords = recoveryWords;
@@ -995,13 +1091,24 @@ export class Wolfronix {
       this.publicKey = await importKeyFromPEM(response.public_key_pem, 'public');
 
       this.userId = email;
-      this.token = 'zk-session'; // Local session marker (auth via X-Wolfronix-Key header)
+      if (response.auth_challenge_id && response.auth_challenge_payload) {
+        await this.completeAuthChallenge(email, response.auth_challenge_id, response.auth_challenge_payload);
+      } else {
+        this.applyAuthTokens(response, email);
+      }
 
       return {
         success: true,
         user_id: email,
-        token: this.token,
-        message: 'Logged in successfully'
+        token: this.token || '',
+        token_type: response.token_type,
+        access_token: response.access_token || this.token || undefined,
+        refresh_token: response.refresh_token || this.refreshToken || undefined,
+        expires_in: response.expires_in,
+        refresh_expires_in: response.refresh_expires_in,
+        access_expires_at: response.access_expires_at,
+        refresh_expires_at: response.refresh_expires_at,
+        message: 'Logged in successfully',
       };
 
     } catch (err) {
@@ -1045,24 +1152,22 @@ export class Wolfronix {
       body: {
         client_id: this.config.clientId,
         user_id: email,
+        challenge_id: response.auth_challenge_id || '',
+        signature: response.auth_challenge_payload ? await signChallenge(recoveredPrivateKey, response.auth_challenge_payload) : '',
         encrypted_private_key: newPasswordWrap.encryptedKey,
         salt: newPasswordWrap.salt
       },
       includeAuth: false
     });
 
-    // 4. Initialize local session
+    // 4. Re-login to establish a fresh server session token pair
     this.privateKey = recoveredPrivateKey;
     this.publicKeyPEM = response.public_key_pem;
     this.publicKey = await importKeyFromPEM(response.public_key_pem, 'public');
-    this.userId = email;
-    this.token = 'zk-session';
-
+    const loginResult = await this.login(email, newPassword);
     return {
-      success: true,
-      user_id: email,
-      token: this.token,
-      message: 'Account recovered successfully'
+      ...loginResult,
+      message: 'Account recovered successfully',
     };
   }
 
@@ -1095,20 +1200,52 @@ export class Wolfronix {
    */
   setToken(token: string, userId?: string): void {
     this.token = token;
+    this.refreshToken = null;
     this.userId = userId || null;
     this.tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    this.refreshTokenExpiry = null;
   }
 
   /**
    * Clear authentication state (logout)
    */
   logout(): void {
+    if (this.token && this.token !== 'zk-session' && this.config.wolfronixKey) {
+      const headers = this.getHeaders(true);
+      headers['Content-Type'] = 'application/json';
+      void fetch(`${this.config.baseUrl}/api/v1/auth/logout`, {
+        method: 'POST',
+        headers,
+        body: '{}',
+        keepalive: true,
+      }).catch(() => undefined);
+    }
+    this.clearAuthState();
+  }
+
+  private clearAuthState(): void {
     this.token = null;
+    this.refreshToken = null;
     this.userId = null;
     this.tokenExpiry = null;
+    this.refreshTokenExpiry = null;
     this.publicKey = null;
     this.privateKey = null;
     this.publicKeyPEM = null;
+  }
+
+  /**
+   * Revoke current server session and clear local auth state.
+   */
+  async logoutSession(): Promise<void> {
+    if (this.token) {
+      try {
+        await this.request('POST', '/api/v1/auth/logout', { body: {} });
+      } catch {
+        // Ignore network/auth errors and always clear local credentials.
+      }
+    }
+    this.clearAuthState();
   }
 
   /**

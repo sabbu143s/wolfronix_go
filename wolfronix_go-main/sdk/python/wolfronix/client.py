@@ -41,6 +41,7 @@ from .crypto import (
     rsa_decrypt,
     rsa_decrypt_base64,
     rsa_encrypt,
+    sign_challenge,
     unwrap_private_key,
     wrap_private_key,
 )
@@ -157,8 +158,10 @@ class Wolfronix:
 
         # Auth state
         self._token: Optional[str] = None
+        self._refresh_token: Optional[str] = None
         self._user_id: Optional[str] = None
         self._token_expiry: Optional[float] = None
+        self._refresh_token_expiry: Optional[float] = None
 
         # Client-side keys (never stored on server in raw form)
         self._public_key = None  # RSAPublicKey
@@ -205,6 +208,69 @@ class Wolfronix:
             if self._user_id:
                 headers["X-User-ID"] = self._user_id
         return headers
+
+    def _apply_auth_tokens(self, response: Dict[str, Any], fallback_user_id: Optional[str] = None) -> None:
+        access_token = response.get("access_token") or response.get("token")
+        refresh_token = response.get("refresh_token")
+        if access_token:
+            self._token = str(access_token)
+        elif not self._token:
+            # Backward compatibility with older servers that returned no token fields.
+            self._token = "zk-session"
+        if refresh_token:
+            self._refresh_token = str(refresh_token)
+        expires_in = response.get("expires_in")
+        if isinstance(expires_in, (int, float)) and expires_in > 0:
+            self._token_expiry = time.time() + float(expires_in)
+        elif self._token:
+            self._token_expiry = time.time() + 15 * 60
+        refresh_expires_in = response.get("refresh_expires_in")
+        if isinstance(refresh_expires_in, (int, float)) and refresh_expires_in > 0:
+            self._refresh_token_expiry = time.time() + float(refresh_expires_in)
+        if fallback_user_id:
+            self._user_id = fallback_user_id
+        elif response.get("user_id"):
+            self._user_id = str(response["user_id"])
+
+    async def _try_refresh_session(self) -> bool:
+        if not self._refresh_token:
+            return False
+        if self._refresh_token_expiry and time.time() > self._refresh_token_expiry:
+            self.logout()
+            return False
+        try:
+            response = await self._request(
+                "POST",
+                "/api/v1/auth/refresh",
+                body={"refresh_token": self._refresh_token},
+                include_auth=False,
+            )
+        except Exception:
+            self.logout()
+            return False
+        if not isinstance(response, dict):
+            self.logout()
+            return False
+        self._apply_auth_tokens(response, self._user_id)
+        return bool(self._token)
+
+    async def _complete_auth_challenge(self, user_id: str, challenge_id: str, payload: str) -> None:
+        if not self._private_key:
+            raise AuthenticationError("Private key not available for auth proof")
+        signature = sign_challenge(self._private_key, payload)
+        response = await self._request(
+            "POST",
+            "/api/v1/auth/complete-login",
+            body={
+                "client_id": self._config.client_id,
+                "user_id": user_id,
+                "challenge_id": challenge_id,
+                "signature": signature,
+            },
+            include_auth=False,
+        )
+        if isinstance(response, dict):
+            self._apply_auth_tokens(response, user_id)
 
     def _build_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -268,6 +334,9 @@ class Wolfronix:
                         )
 
                 if resp.status_code == 401:
+                    if include_auth and endpoint != "/api/v1/auth/refresh":
+                        if await self._try_refresh_session():
+                            continue
                     error_body = resp.json() if resp.content else {}
                     raise AuthenticationError(
                         error_body.get("error", "Authentication failed")
@@ -490,13 +559,27 @@ class Wolfronix:
             self._public_key = key_pair.public_key
             self._private_key = key_pair.private_key
             self._public_key_pem = public_key_pem
-            self._token = "zk-session"
+            if response.get("auth_challenge_id") and response.get("auth_challenge_payload"):
+                await self._complete_auth_challenge(
+                    email,
+                    response["auth_challenge_id"],
+                    response["auth_challenge_payload"],
+                )
+            else:
+                self._apply_auth_tokens(response, email)
 
         result = AuthResponse(
             success=response.get("status") == "success" or response.get("success", False),
             user_id=response.get("user_id", email),
             token=self._token or "",
             message=response.get("message", ""),
+            token_type=response.get("token_type"),
+            access_token=response.get("access_token") or self._token,
+            refresh_token=response.get("refresh_token") or self._refresh_token,
+            expires_in=response.get("expires_in"),
+            refresh_expires_in=response.get("refresh_expires_in"),
+            access_expires_at=response.get("access_expires_at"),
+            refresh_expires_at=response.get("refresh_expires_at"),
         )
         # Keep parity with JS SDK: attach optional recovery metadata on result object.
         if enable_recovery and recovery_phrase_text:
@@ -547,13 +630,27 @@ class Wolfronix:
         self._public_key_pem = response["public_key_pem"]
         self._public_key = import_key_from_pem(response["public_key_pem"], "public")
         self._user_id = email
-        self._token = "zk-session"
+        if response.get("auth_challenge_id") and response.get("auth_challenge_payload"):
+            await self._complete_auth_challenge(
+                email,
+                response["auth_challenge_id"],
+                response["auth_challenge_payload"],
+            )
+        else:
+            self._apply_auth_tokens(response, email)
 
         return AuthResponse(
             success=True,
             user_id=email,
-            token=self._token,
+            token=self._token or "",
             message="Logged in successfully",
+            token_type=response.get("token_type"),
+            access_token=response.get("access_token") or self._token,
+            refresh_token=response.get("refresh_token") or self._refresh_token,
+            expires_in=response.get("expires_in"),
+            refresh_expires_in=response.get("refresh_expires_in"),
+            access_expires_at=response.get("access_expires_at"),
+            refresh_expires_at=response.get("refresh_expires_at"),
         )
 
     async def recover_account(self, email: str, recovery_phrase: str, new_password: str) -> AuthResponse:
@@ -584,6 +681,8 @@ class Wolfronix:
             body={
                 "client_id": self._config.client_id,
                 "user_id": email,
+                "challenge_id": response.get("auth_challenge_id", ""),
+                "signature": sign_challenge(recovered_private, response["auth_challenge_payload"]) if response.get("auth_challenge_payload") else "",
                 "encrypted_private_key": new_wrap.encrypted_key,
                 "salt": new_wrap.salt,
             },
@@ -594,7 +693,10 @@ class Wolfronix:
         self._public_key_pem = response.get("public_key_pem", "")
         self._public_key = import_key_from_pem(self._public_key_pem, "public")
         self._user_id = email
-        self._token = "zk-session"
+        self._apply_auth_tokens(response, email)
+        if not self._token:
+            self._token = "zk-session"
+            self._token_expiry = time.time() + 24 * 60 * 60
 
         return AuthResponse(
             success=True,
@@ -619,17 +721,47 @@ class Wolfronix:
     def set_token(self, token: str, user_id: Optional[str] = None) -> None:
         """Set authentication token directly (useful for server-side apps)."""
         self._token = token
+        self._refresh_token = None
         self._user_id = user_id
         self._token_expiry = time.time() + 86400  # 24h
+        self._refresh_token_expiry = None
 
     def logout(self) -> None:
         """Clear authentication state."""
+        if self._token and self._token != "zk-session" and self._config.wolfronix_key:
+            try:
+                with httpx.Client(
+                    base_url=self._config.base_url,
+                    verify=not self._config.insecure,
+                    timeout=1.0,
+                ) as client:
+                    client.post(
+                        "/api/v1/auth/logout",
+                        headers=self._get_headers(True),
+                        json={},
+                    )
+            except Exception:
+                pass
+        self._clear_auth_state()
+
+    def _clear_auth_state(self) -> None:
         self._token = None
+        self._refresh_token = None
         self._user_id = None
         self._token_expiry = None
+        self._refresh_token_expiry = None
         self._public_key = None
         self._private_key = None
         self._public_key_pem = None
+
+    async def logout_session(self) -> None:
+        """Revoke current server session and clear local auth state."""
+        if self._token:
+            try:
+                await self._request("POST", "/api/v1/auth/logout", body={})
+            except Exception:
+                pass
+        self._clear_auth_state()
 
     # ──────────────────────────────────────────────────────────────────────────
     # File Operations

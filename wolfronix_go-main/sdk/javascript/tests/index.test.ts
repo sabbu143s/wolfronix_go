@@ -1,5 +1,5 @@
 /// <reference types="vitest" />
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Wolfronix, {
   WolfronixError,
   AuthenticationError,
@@ -7,6 +7,7 @@ import Wolfronix, {
   KeyPartResponse,
   createClient
 } from '../src/index';
+import { exportKeyToPEM, wrapPrivateKey } from '../src/crypto';
 
 describe('Wolfronix SDK', () => {
   let client: Wolfronix;
@@ -17,6 +18,10 @@ describe('Wolfronix SDK', () => {
       clientId: 'test-client',
       wolfronixKey: 'test-api-key'
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('Constructor', () => {
@@ -77,6 +82,59 @@ describe('Wolfronix SDK', () => {
 
     it('should throw ValidationError for empty password', async () => {
       await expect(client.login('user@example.com', '')).rejects.toThrow(ValidationError);
+    });
+
+    it('should complete auth challenge after login', async () => {
+      const originalFetch = global.fetch;
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          status: 'success',
+          public_key_pem: '-----BEGIN PUBLIC KEY-----\nMCwwDQYJKoZIhvcNAQEBBQADGwAwGAIRAIW3q9Y5sE3Z4P3Qv8iHjXsCAwEAAQ==\n-----END PUBLIC KEY-----',
+          encrypted_private_key: 'invalid',
+          salt: 'invalid',
+        }), { status: 200 }))
+      ;
+
+      const keyPair = await crypto.subtle.generateKey(
+        {
+          name: 'RSA-OAEP',
+          modulusLength: 2048,
+          publicExponent: new Uint8Array([1, 0, 1]),
+          hash: 'SHA-256'
+        },
+        true,
+        ['encrypt', 'decrypt']
+      );
+      const publicKeyPEM = await exportKeyToPEM(keyPair.publicKey, 'public');
+      const wrapped = await wrapPrivateKey(keyPair.privateKey, 'password123');
+      fetchMock.mockReset();
+      fetchMock
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          status: 'success',
+          public_key_pem: publicKeyPEM,
+          encrypted_private_key: wrapped.encryptedKey,
+          salt: wrapped.salt,
+          auth_challenge_id: 'challenge-1',
+          auth_challenge_payload: 'payload-1'
+        }), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          status: 'success',
+          access_token: 'access-1',
+          refresh_token: 'refresh-1',
+          expires_in: 900,
+          refresh_expires_in: 3600
+        }), { status: 200 }));
+
+      global.fetch = fetchMock as typeof global.fetch;
+      try {
+        const result = await client.login('user@example.com', 'password123');
+        expect(result.success).toBe(true);
+        expect(result.access_token).toBe('access-1');
+        expect(client.isAuthenticated()).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        global.fetch = originalFetch;
+      }
     });
   });
 

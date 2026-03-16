@@ -136,6 +136,37 @@ class TestAuthentication:
         assert wfx.is_authenticated()
         assert wfx.has_private_key()
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_login_completes_auth_challenge(self, wfx):
+        kp = generate_key_pair()
+        pub_pem = export_key_to_pem(kp.public_key, "public")
+        wrapped = wrap_private_key(kp.private_key, "password123")
+
+        respx.post("https://wolfronix.test/api/v1/keys/login").mock(
+            return_value=Response(200, json={
+                "encrypted_private_key": wrapped.encrypted_key,
+                "salt": wrapped.salt,
+                "public_key_pem": pub_pem,
+                "auth_challenge_id": "challenge-1",
+                "auth_challenge_payload": "payload-1",
+            })
+        )
+        respx.post("https://wolfronix.test/api/v1/auth/complete-login").mock(
+            return_value=Response(200, json={
+                "status": "success",
+                "access_token": "access-1",
+                "refresh_token": "refresh-1",
+                "expires_in": 900,
+                "refresh_expires_in": 3600,
+            })
+        )
+
+        result = await wfx.login("user@test.com", "password123")
+        assert result.success is True
+        assert result.access_token == "access-1"
+        assert wfx.is_authenticated()
+
     @pytest.mark.asyncio
     async def test_rotate_identity_keys_not_supported(self, wfx):
         wfx.set_token("token", "user@test.com")

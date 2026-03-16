@@ -42,12 +42,16 @@ asyncio.run(main())
 - `await rotate_identity_keys(password, recovery_phrase=None)`
 - `set_token(token, user_id=None)`
 - `logout()`
+- `await logout_session()`
 - `is_authenticated()`
 - `get_user_id()`
 - `has_private_key()`
 
 Notes:
 - `register(..., enable_recovery=True)` adds recovery wrapping and returns recovery metadata on the response object.
+- Auth responses include Bearer session fields (`access_token`, `refresh_token`, `expires_in`).
+- On servers with the latest auth hardening, the SDK automatically completes the private-key challenge step for `register()` and `login()`.
+- The SDK auto-refreshes expired access tokens via `/api/v1/auth/refresh`.
 - `rotate_identity_keys` currently raises `NOT_SUPPORTED` against current server API.
 
 ## Files

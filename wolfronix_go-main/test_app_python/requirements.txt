@@ -1,0 +1,3 @@
+wolfronix-sdk
+httpx
+colorama

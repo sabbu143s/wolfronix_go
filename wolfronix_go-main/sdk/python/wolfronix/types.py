@@ -59,6 +59,13 @@ class AuthResponse:
     user_id: str
     token: str
     message: str
+    token_type: Optional[str] = None
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    expires_in: Optional[int] = None
+    refresh_expires_in: Optional[int] = None
+    access_expires_at: Optional[str] = None
+    refresh_expires_at: Optional[str] = None
 
 
 @dataclass

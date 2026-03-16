@@ -60,12 +60,16 @@ await wfx.login('user@example.com', 'password123');
 | `rotateIdentityKeys(password, recoveryPhrase?)` | `Promise<{ success: boolean; message: string; recoveryPhrase?: string }>` |
 | `setToken(token, userId?)` | `void` |
 | `logout()` | `void` |
+| `logoutSession()` | `Promise<void>` |
 | `isAuthenticated()` | `boolean` |
 | `getUserId()` | `string \| null` |
 | `hasPrivateKey()` | `boolean` |
 
 Notes:
 - `register(..., { enableRecovery: true })` returns `recoveryPhrase` and `recoveryWords`.
+- Auth responses include Bearer session fields: `access_token`, `refresh_token`, `expires_in`, `refresh_expires_in`.
+- On servers with the latest auth hardening, the SDK automatically completes the private-key challenge step for `register()` and `login()`.
+- The SDK auto-refreshes expired access tokens using `/api/v1/auth/refresh`.
 - `rotateIdentityKeys` currently throws `NOT_SUPPORTED` on the current server API.
 
 ### Recovery Example

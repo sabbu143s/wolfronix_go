@@ -271,6 +271,16 @@ def rsa_decrypt(encrypted_b64: str, private_key: rsa.RSAPrivateKey) -> bytes:
     )
 
 
+def sign_challenge(private_key: rsa.RSAPrivateKey, payload: str) -> str:
+    """Sign an auth challenge payload with RSA PKCS#1 v1.5 + SHA-256."""
+    signature = private_key.sign(
+        payload.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("utf-8")
+
+
 def rsa_decrypt_base64(encrypted_b64: str, private_key: rsa.RSAPrivateKey) -> str:
     """
     Decrypt RSA-OAEP ciphertext and return plaintext as base64.

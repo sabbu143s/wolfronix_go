@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -31,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"wolfronixgo/internal/auth"
 	"wolfronixgo/internal/clientdb"
 	"wolfronixgo/internal/fakegen"
 	"wolfronixgo/internal/keywrap"
@@ -49,6 +51,7 @@ var (
 	adminAPIKey      string
 	metricsStore     *metrics.MetricsStore
 	keyWrapStore     *keywrap.KeyWrapStore
+	sessionStore     *auth.SessionStore
 	fakeGen          *fakegen.FakeDataGenerator
 	// Client DB components (Enterprise mode)
 	clientRegistry *clientdb.ClientRegistry
@@ -91,6 +94,26 @@ func initDB() {
 			log.Printf("⚠️ KeyWrap Store Init Failed: %v", err)
 		} else {
 			log.Println("🔐 Key Wrapping System Initialized!")
+		}
+
+		// Initialize auth/session store
+		accessTTL := 15 * time.Minute
+		refreshTTL := 7 * 24 * time.Hour
+		if v := strings.TrimSpace(os.Getenv("AUTH_ACCESS_TTL_MINUTES")); v != "" {
+			if mins, convErr := strconv.Atoi(v); convErr == nil && mins > 0 {
+				accessTTL = time.Duration(mins) * time.Minute
+			}
+		}
+		if v := strings.TrimSpace(os.Getenv("AUTH_REFRESH_TTL_HOURS")); v != "" {
+			if hrs, convErr := strconv.Atoi(v); convErr == nil && hrs > 0 {
+				refreshTTL = time.Duration(hrs) * time.Hour
+			}
+		}
+		sessionStore, err = auth.NewSessionStore(db, accessTTL, refreshTTL)
+		if err != nil {
+			log.Printf("⚠️ Session Store Init Failed: %v", err)
+		} else {
+			log.Printf("🔐 Auth Session Store Initialized (access=%s refresh=%s)", accessTTL, refreshTTL)
 		}
 
 		// Initialize client registry (Wolfronix only stores client metadata)
@@ -140,6 +163,7 @@ func main() {
 	r := mux.NewRouter()
 	r.Use(corsMiddleware)
 	r.Use(apiKeyAuthMiddleware)
+	r.Use(userAuthMiddleware)
 
 	// Health check endpoint
 	r.HandleFunc("/health", healthCheckHandler).Methods("GET", "OPTIONS")
@@ -176,6 +200,10 @@ func main() {
 	r.HandleFunc("/api/v1/keys/recover", recoverUserKeysHandler).Methods("POST", "OPTIONS")
 	// Update password-wrapped key after recovery
 	r.HandleFunc("/api/v1/keys/update-password", updatePasswordHandler).Methods("POST", "OPTIONS")
+	// Session auth routes
+	r.HandleFunc("/api/v1/auth/complete-login", completeLoginHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/api/v1/auth/refresh", refreshAuthSessionHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/api/v1/auth/logout", logoutAuthSessionHandler).Methods("POST", "OPTIONS")
 
 	// Metrics Routes
 	r.HandleFunc("/api/v1/metrics/summary", getMetricsSummaryHandler).Methods("GET", "OPTIONS")
@@ -1319,6 +1347,55 @@ func getAuthenticatedClientID(r *http.Request) (string, error) {
 	return authenticatedID, nil
 }
 
+func getRequestIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+		return xrip
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func buildAuthChallengePayload(purpose, clientID, userID, challengeID string) string {
+	return fmt.Sprintf("WOLFRONIX-AUTH:%s:%s:%s:%s", purpose, clientID, userID, challengeID)
+}
+
+func verifySignatureWithPublicKey(publicKeyPEM, payload, signatureB64 string) error {
+	block, _ := pem.Decode([]byte(publicKeyPEM))
+	if block == nil {
+		return errors.New("invalid public key")
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		if pkcs1Pub, pkcs1Err := x509.ParsePKCS1PublicKey(block.Bytes); pkcs1Err == nil {
+			pubAny = pkcs1Pub
+		} else {
+			return err
+		}
+	}
+	pub, ok := pubAny.(*rsa.PublicKey)
+	if !ok {
+		return errors.New("public key is not RSA")
+	}
+	signature, err := base64.StdEncoding.DecodeString(signatureB64)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(payload))
+	return rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], signature)
+}
+
 // apiKeyAuthMiddleware validates X-Wolfronix-Key header for all API endpoints
 func apiKeyAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1362,6 +1439,63 @@ func apiKeyAuthMiddleware(next http.Handler) http.Handler {
 
 		// Set authenticated client ID for downstream handlers
 		r.Header.Set("X-Authenticated-Client-ID", client.ClientID)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func requiresUserAuth(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/encrypt") ||
+		strings.HasPrefix(path, "/api/v1/files") ||
+		strings.HasPrefix(path, "/api/v1/messages") ||
+		strings.HasPrefix(path, "/api/v1/stream")
+}
+
+func userAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip preflight
+		if r.Method == "OPTIONS" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Skip non-user routes
+		if !requiresUserAuth(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if sessionStore == nil {
+			http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+			return
+		}
+
+		authz := r.Header.Get("Authorization")
+		token, err := auth.ParseBearerToken(authz)
+		if err != nil || token == "" {
+			http.Error(w, `{"error":"missing or invalid bearer token"}`, http.StatusUnauthorized)
+			return
+		}
+
+		sess, err := sessionStore.ValidateAccessToken(token)
+		if err != nil {
+			http.Error(w, `{"error":"invalid or expired session"}`, http.StatusUnauthorized)
+			return
+		}
+
+		authenticatedClientID := r.Header.Get("X-Authenticated-Client-ID")
+		if authenticatedClientID == "" || authenticatedClientID != sess.ClientID {
+			http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
+			return
+		}
+
+		if headerUser := r.Header.Get("X-User-ID"); headerUser != "" && headerUser != sess.UserID {
+			http.Error(w, `{"error":"user/session mismatch"}`, http.StatusForbidden)
+			return
+		}
+
+		r.Header.Set("X-Authenticated-User-ID", sess.UserID)
+		if r.Header.Get("X-User-ID") == "" {
+			r.Header.Set("X-User-ID", sess.UserID)
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -1532,7 +1666,18 @@ func addUserHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
 		return
 	}
-
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
+		return
+	}
 	if req.ClientID == "" || req.UserID == "" {
 		http.Error(w, `{"error": "client_id and user_id are required"}`, http.StatusBadRequest)
 		return
@@ -1572,7 +1717,18 @@ func removeUserHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
 		return
 	}
-
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
+		return
+	}
 	if req.ClientID == "" || req.UserID == "" {
 		http.Error(w, `{"error": "client_id and user_id are required"}`, http.StatusBadRequest)
 		return
@@ -1606,6 +1762,18 @@ func recordUserLoginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
 		return
 	}
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
+		return
+	}
 
 	if req.ClientID == "" || req.UserID == "" {
 		http.Error(w, `{"error": "client_id and user_id are required"}`, http.StatusBadRequest)
@@ -1633,6 +1801,10 @@ func registerUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "key management not initialized"}`, http.StatusServiceUnavailable)
 		return
 	}
+	if sessionStore == nil {
+		http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
 
 	var req struct {
 		ClientID                    string `json:"client_id"`
@@ -1646,6 +1818,18 @@ func registerUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
 		return
 	}
 
@@ -1689,13 +1873,23 @@ func registerUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("🔐 Zero-Knowledge: Stored wrapped keys for user %s (client: %s)", req.UserID, req.ClientID)
 
+	challenge, err := sessionStore.IssueChallenge(req.ClientID, req.UserID, "login", 10*time.Minute)
+	if err != nil {
+		log.Printf("failed to issue auth challenge: %v", err)
+		http.Error(w, `{"error":"failed to initialize login proof"}`, http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":    "success",
-		"message":   "Keys registered successfully. Private key is encrypted and can only be unlocked with your password.",
-		"client_id": req.ClientID,
-		"user_id":   req.UserID,
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":                    "success",
+		"message":                   "Keys registered successfully. Complete proof with your unlocked private key to start a session.",
+		"client_id":                 req.ClientID,
+		"user_id":                   req.UserID,
+		"auth_challenge_id":         challenge.ChallengeID,
+		"auth_challenge_payload":    buildAuthChallengePayload("login", req.ClientID, req.UserID, challenge.ChallengeID),
+		"auth_challenge_expires_at": challenge.ExpiresAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -1707,6 +1901,10 @@ func loginFetchKeysHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "key management not initialized"}`, http.StatusServiceUnavailable)
 		return
 	}
+	if sessionStore == nil {
+		http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
 
 	var req struct {
 		ClientID string `json:"client_id"`
@@ -1715,6 +1913,18 @@ func loginFetchKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
 		return
 	}
 
@@ -1740,16 +1950,170 @@ func loginFetchKeysHandler(w http.ResponseWriter, r *http.Request) {
 	if metricsStore != nil {
 		metricsStore.RecordUserLogin(req.ClientID, req.UserID)
 	}
+	challenge, err := sessionStore.IssueChallenge(req.ClientID, req.UserID, "login", 10*time.Minute)
+	if err != nil {
+		log.Printf("failed to issue auth challenge: %v", err)
+		http.Error(w, `{"error":"failed to initialize login proof"}`, http.StatusInternalServerError)
+		return
+	}
 
 	log.Printf("🔓 Zero-Knowledge: Sent wrapped keys to user %s for client-side decryption", req.UserID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":                "success",
-		"message":               "Decrypt the private key locally using your password",
-		"public_key_pem":        wrappedKey.PublicKeyPEM,
-		"encrypted_private_key": wrappedKey.EncryptedPrivKey,
-		"salt":                  wrappedKey.Salt,
+		"status":                    "success",
+		"message":                   "Decrypt the private key locally using your password",
+		"public_key_pem":            wrappedKey.PublicKeyPEM,
+		"encrypted_private_key":     wrappedKey.EncryptedPrivKey,
+		"salt":                      wrappedKey.Salt,
+		"auth_challenge_id":         challenge.ChallengeID,
+		"auth_challenge_payload":    buildAuthChallengePayload("login", req.ClientID, req.UserID, challenge.ChallengeID),
+		"auth_challenge_expires_at": challenge.ExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func completeLoginHandler(w http.ResponseWriter, r *http.Request) {
+	if sessionStore == nil || keyWrapStore == nil {
+		http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		ClientID    string `json:"client_id"`
+		UserID      string `json:"user_id"`
+		ChallengeID string `json:"challenge_id"`
+		Signature   string `json:"signature"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
+		return
+	}
+	if req.UserID == "" || req.ChallengeID == "" || req.Signature == "" {
+		http.Error(w, `{"error":"user_id, challenge_id, and signature are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	wrappedKey, err := keyWrapStore.GetWrappedKey(req.ClientID, req.UserID)
+	if err != nil {
+		http.Error(w, `{"error":"failed to fetch keys"}`, http.StatusInternalServerError)
+		return
+	}
+	if wrappedKey == nil {
+		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
+		return
+	}
+
+	payload := buildAuthChallengePayload("login", req.ClientID, req.UserID, req.ChallengeID)
+	if err := verifySignatureWithPublicKey(wrappedKey.PublicKeyPEM, payload, req.Signature); err != nil {
+		http.Error(w, `{"error":"invalid login proof"}`, http.StatusUnauthorized)
+		return
+	}
+	if err := sessionStore.ConsumeChallenge(req.ChallengeID, req.ClientID, req.UserID, "login"); err != nil {
+		http.Error(w, `{"error":"invalid or expired login challenge"}`, http.StatusUnauthorized)
+		return
+	}
+
+	tokens, err := sessionStore.IssueSession(req.ClientID, req.UserID, getRequestIP(r), r.UserAgent())
+	if err != nil {
+		http.Error(w, `{"error":"failed to initialize session"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":             "success",
+		"message":            "Authenticated successfully",
+		"user_id":            req.UserID,
+		"token":              tokens.AccessToken,
+		"token_type":         tokens.TokenType,
+		"access_token":       tokens.AccessToken,
+		"refresh_token":      tokens.RefreshToken,
+		"expires_in":         tokens.ExpiresInSeconds,
+		"refresh_expires_in": tokens.RefreshExpiresInSecs,
+		"access_expires_at":  tokens.AccessExpiresAt.UTC().Format(time.RFC3339),
+		"refresh_expires_at": tokens.RefreshExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func refreshAuthSessionHandler(w http.ResponseWriter, r *http.Request) {
+	if sessionStore == nil {
+		http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.RefreshToken) == "" {
+		http.Error(w, `{"error":"refresh_token is required"}`, http.StatusBadRequest)
+		return
+	}
+	tokens, err := sessionStore.RefreshSession(req.RefreshToken, authClientID, getRequestIP(r), r.UserAgent())
+	if err != nil {
+		http.Error(w, `{"error":"invalid or expired refresh token"}`, http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":             "success",
+		"token_type":         tokens.TokenType,
+		"access_token":       tokens.AccessToken,
+		"refresh_token":      tokens.RefreshToken,
+		"expires_in":         tokens.ExpiresInSeconds,
+		"refresh_expires_in": tokens.RefreshExpiresInSecs,
+		"access_expires_at":  tokens.AccessExpiresAt.UTC().Format(time.RFC3339),
+		"refresh_expires_at": tokens.RefreshExpiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+func logoutAuthSessionHandler(w http.ResponseWriter, r *http.Request) {
+	if sessionStore == nil {
+		http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+
+	token, err := auth.ParseBearerToken(r.Header.Get("Authorization"))
+	if err != nil || token == "" {
+		http.Error(w, `{"error":"missing or invalid bearer token"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if err := sessionStore.RevokeAccessToken(token, authClientID, getRequestIP(r), r.UserAgent()); err != nil {
+		http.Error(w, `{"error":"invalid session token"}`, http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "session revoked",
 	})
 }
 
@@ -1761,6 +2125,10 @@ func recoverUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "key management not initialized"}`, http.StatusServiceUnavailable)
 		return
 	}
+	if sessionStore == nil {
+		http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
 
 	var req struct {
 		ClientID string `json:"client_id"`
@@ -1769,6 +2137,18 @@ func recoverUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
 		return
 	}
 
@@ -1796,13 +2176,22 @@ func recoverUserKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("🔑 Recovery: Sent recovery-wrapped key to user %s for client-side unwrapping", req.UserID)
 
+	challenge, err := sessionStore.IssueChallenge(req.ClientID, req.UserID, "recovery", 10*time.Minute)
+	if err != nil {
+		http.Error(w, `{"error":"failed to initialize recovery proof"}`, http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":                         "success",
-		"message":                        "Use your recovery phrase to decrypt the private key",
+		"message":                        "Use your recovery phrase to decrypt the private key, then sign the recovery challenge to authorize a password reset.",
 		"public_key_pem":                 wrappedKey.PublicKeyPEM,
 		"recovery_encrypted_private_key": wrappedKey.RecoveryEncryptedPrivKey,
 		"recovery_salt":                  wrappedKey.RecoverySalt,
+		"auth_challenge_id":              challenge.ChallengeID,
+		"auth_challenge_payload":         buildAuthChallengePayload("recovery", req.ClientID, req.UserID, challenge.ChallengeID),
+		"auth_challenge_expires_at":      challenge.ExpiresAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -1814,10 +2203,16 @@ func updatePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "key management not initialized"}`, http.StatusServiceUnavailable)
 		return
 	}
+	if sessionStore == nil {
+		http.Error(w, `{"error":"auth not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
 
 	var req struct {
 		ClientID            string `json:"client_id"`
 		UserID              string `json:"user_id"`
+		ChallengeID         string `json:"challenge_id"`
+		Signature           string `json:"signature"`
 		EncryptedPrivateKey string `json:"encrypted_private_key"` // New password-wrapped key
 		Salt                string `json:"salt"`                  // New salt
 	}
@@ -1826,13 +2221,43 @@ func updatePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
 		return
 	}
-
-	if req.ClientID == "" || req.UserID == "" || req.EncryptedPrivateKey == "" || req.Salt == "" {
-		http.Error(w, `{"error": "client_id, user_id, encrypted_private_key, and salt are required"}`, http.StatusBadRequest)
+	authClientID, authErr := getAuthenticatedClientID(r)
+	if authErr != nil {
+		http.Error(w, `{"error":"Authentication failed"}`, http.StatusForbidden)
+		return
+	}
+	if req.ClientID == "" {
+		req.ClientID = authClientID
+	}
+	if req.ClientID != authClientID {
+		http.Error(w, `{"error":"client/session mismatch"}`, http.StatusForbidden)
 		return
 	}
 
-	err := keyWrapStore.UpdatePasswordWrappedKey(req.ClientID, req.UserID, req.EncryptedPrivateKey, req.Salt)
+	if req.ClientID == "" || req.UserID == "" || req.ChallengeID == "" || req.Signature == "" || req.EncryptedPrivateKey == "" || req.Salt == "" {
+		http.Error(w, `{"error": "client_id, user_id, challenge_id, signature, encrypted_private_key, and salt are required"}`, http.StatusBadRequest)
+		return
+	}
+	wrappedKey, err := keyWrapStore.GetWrappedKey(req.ClientID, req.UserID)
+	if err != nil {
+		http.Error(w, `{"error":"failed to fetch keys"}`, http.StatusInternalServerError)
+		return
+	}
+	if wrappedKey == nil {
+		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
+		return
+	}
+	payload := buildAuthChallengePayload("recovery", req.ClientID, req.UserID, req.ChallengeID)
+	if err := verifySignatureWithPublicKey(wrappedKey.PublicKeyPEM, payload, req.Signature); err != nil {
+		http.Error(w, `{"error":"invalid recovery proof"}`, http.StatusUnauthorized)
+		return
+	}
+	if err := sessionStore.ConsumeChallenge(req.ChallengeID, req.ClientID, req.UserID, "recovery"); err != nil {
+		http.Error(w, `{"error":"invalid or expired recovery challenge"}`, http.StatusUnauthorized)
+		return
+	}
+
+	err = keyWrapStore.UpdatePasswordWrappedKey(req.ClientID, req.UserID, req.EncryptedPrivateKey, req.Salt)
 	if err != nil {
 		log.Printf("❌ Failed to update password-wrapped key: %v", err)
 		http.Error(w, `{"error": "failed to update key"}`, http.StatusInternalServerError)

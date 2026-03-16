@@ -21,6 +21,13 @@ const RSA_ALG = {
     hash: "SHA-256",
 };
 
+const RSA_SIGN_ALG = {
+    name: "RSASSA-PKCS1-v1_5",
+    modulusLength: 2048,
+    publicExponent: new Uint8Array([1, 0, 1]),
+    hash: "SHA-256",
+};
+
 const WRAP_ALG = "AES-GCM";
 const SESSION_ALG = "AES-GCM";
 const PBKDF2_ITERATIONS = 100000;
@@ -256,6 +263,23 @@ export async function rsaDecrypt(encryptedBase64: string, privateKey: CryptoKey)
         data
     );
     return decrypted;
+}
+
+export async function signChallenge(privateKey: CryptoKey, payload: string): Promise<string> {
+    const pkcs8 = await getCrypto().subtle.exportKey("pkcs8", privateKey);
+    const signingKey = await getCrypto().subtle.importKey(
+        "pkcs8",
+        pkcs8,
+        RSA_SIGN_ALG,
+        false,
+        ["sign"]
+    );
+    const signature = await getCrypto().subtle.sign(
+        RSA_SIGN_ALG,
+        signingKey,
+        new TextEncoder().encode(payload)
+    );
+    return arrayBufferToBase64(signature);
 }
 
 /**
